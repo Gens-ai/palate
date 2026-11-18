@@ -158,6 +158,9 @@ called, and installing it does not change how anything else behaves. A bundled
 skill teaches the agent to log verdicts as they surface in conversation instead
 of interviewing you.
 
+How the pieces connect — the pick path, the ingest seam, and where each
+honesty gate lives — is in [docs/pipeline.md](docs/pipeline.md).
+
 Film and TV work today. `music` and `food` already exist in the schema and the
 source seam, because the valuable part — a ledger of verdicts and reasons, with
 mood held separately from taste — is not specific to film. Those adapters are
