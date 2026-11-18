@@ -24,6 +24,30 @@ DETAIL_BUDGET = CANDIDATE_POOL
 # Separate budget for the user's own verdict works, which must be tagged or
 # there is nothing for candidates to be similar TO.
 VERDICT_TAG_BUDGET = 12
+# How many liked works may seed the pool. One TMDB recommendations call per
+# pivot, and the pool is split evenly between them, so this is both a cost
+# ceiling and the width of the search.
+PIVOT_LIMIT = 6
+
+
+def _interleave(groups):
+    """Round-robin merge, so every pivot actually reaches the pool.
+
+    Concatenating the groups and truncating gives the first pivot the whole
+    pool: TMDB returns a full page of about 20 per pivot against a pool of 24,
+    so pivot 1 took ~20 slots, pivot 2 took the remainder and every pivot
+    after that got NOTHING. The ledger looked like it was searching six
+    favourites and was really searching one, which is invisible from the
+    output because the picks it returns are all legitimately well scored.
+    Taking one candidate from each pivot in turn costs the same calls and
+    spends the pool evenly.
+    """
+    out = []
+    for i in range(max((len(g) for g in groups), default=0)):
+        for g in groups:
+            if i < len(g):
+                out.append(g[i])
+    return out
 
 
 def _ok(payload):
@@ -165,29 +189,45 @@ def palate_pick(params, **_kwargs):
         else:
             liked = [v for v in verdicts if v["polarity"] > 0]
             pivots = []
-            for v in liked[-8:]:
+            for v in liked:
                 row = con.execute("SELECT source, source_id FROM works WHERE id=?",
                                   (v["work_id"],)).fetchone()
                 if row and row["source"] == "tmdb" and row["source_id"]:
                     pivots.append((row["source_id"], v["title"]))
-            for tmdb_id, _title in pivots[:5]:
+            pivots = pivots[-PIVOT_LIMIT:]
+            groups = []
+            for tmdb_id, title in pivots:
                 try:
-                    candidates.extend(tmdb.recommendations(api_key, medium, tmdb_id))
+                    recs = tmdb.recommendations(api_key, medium, tmdb_id)
                 except tmdb.TmdbError:
                     continue
+                for r in recs:
+                    r["from_pivot"] = title
+                if recs:
+                    groups.append(recs)
+            candidates = _interleave(groups)
             if candidates:
-                how = f"built from {len(pivots[:5])} works you rated well"
+                how = (f"round-robin across {len(groups)} works you rated well, "
+                       f"so each contributes to the pool")
             else:
                 candidates = tmdb.discover(
                     api_key, medium, max_runtime=state["max_runtime_min"])
                 how = "cold start: popular titles, since the ledger has nothing to lean on yet"
 
-        # dedupe, drop anything already in the ledger as seen
-        uniq, by_id = [], set()
+        # dedupe, drop anything already in the ledger as seen. Keep every pivot
+        # that suggested a title: being recommended by three favourites at once
+        # is a stronger signal than being recommended by one, and it is also
+        # what the diversity cap needs to avoid six variations of one film.
+        uniq, by_id = [], {}
         for c in candidates:
-            if c["tmdb_id"] in by_id:
+            pivot = c.pop("from_pivot", None)
+            prev = by_id.get(c["tmdb_id"])
+            if prev is not None:
+                if pivot and pivot not in prev["from_pivots"]:
+                    prev["from_pivots"].append(pivot)
                 continue
-            by_id.add(c["tmdb_id"])
+            c["from_pivots"] = [pivot] if pivot else []
+            by_id[c["tmdb_id"]] = c
             uniq.append(c)
         candidates = uniq[:CANDIDATE_POOL]
 

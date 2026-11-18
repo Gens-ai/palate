@@ -22,7 +22,11 @@ with a missing arrow would have shown that in seconds.
             │  ** skip this and the net is empty **          │
             └─────────────────────────┬──────────────────────┘
                                       │
-                           picker.tag_net()
+                           picker.rank()
+   candidate generation, round-robin across up to PIVOT_LIMIT liked works
+   (concatenating pages instead gives pivot 1 the whole pool and the rest none)
+                         │
+                 picker.tag_net()
                  {tag: Σ polarity × weight}, + who contributed
                                       │
    candidate generation               │
@@ -129,6 +133,7 @@ removed:
 | Unverifiable constraint | `picker.state_check` — `unchecked` list | say something "fits" on a dimension never measured |
 | Cost is named, not implied | `picker.cost_of` — `cost` on every entry | present a paid rental as if it were free |
 | No invented prices | nothing quotes an amount | TMDB gives providers, not prices, so none is guessed |
+| One favourite cannot own the answer | `tools._interleave` + `picker._diversify` (`PICKS_PER_PIVOT`) | present six neighbours of a single liked work as if the whole ledger were consulted |
 | Guessed units | `sources/*` → `assumed_units` | launder a guess into a reading |
 | Foreign file | `sources.base.read_csv_guarded` | echo contents or schema of a non-export |
 

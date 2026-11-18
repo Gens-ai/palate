@@ -178,6 +178,37 @@ def explain(contrib):
 NOT_LOOKED_UP = ("not looked up yet, so it is unranked rather than unmatched; "
                  "ask again and it will be scored properly")
 
+# At most this many picks may trace back to the same liked work. Six films that
+# are all neighbours of one favourite is a narrower answer than the ledger can
+# actually support, and it reads as the picker having one idea.
+PICKS_PER_PIVOT = 2
+
+
+def _diversify(ordered, limit, cap=PICKS_PER_PIVOT):
+    """Best `limit` items, but no more than `cap` tracing to one pivot.
+
+    Any shortfall is filled from what the cap held back, so diversity is a
+    preference between eligible candidates and never a reason to return fewer
+    picks than the user asked for. Candidates with no pivot attribution (a
+    seeded search, or the cold-start path) share one bucket and are capped
+    together, which is correct: they came from a single source too.
+    """
+    chosen, held, counts = [], [], {}
+    for item in ordered:
+        if len(chosen) >= limit:
+            break
+        src = (item.get("from_pivots") or [None])[0]
+        if counts.get(src, 0) >= cap:
+            held.append(item)
+            continue
+        counts[src] = counts.get(src, 0) + 1
+        chosen.append(item)
+    for item in held:
+        if len(chosen) >= limit:
+            break
+        chosen.append(item)
+    return chosen
+
 
 def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
     """Rank candidates. Returns (picks, shelved).
@@ -210,6 +241,7 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
             "tmdb_id": cand.get("tmdb_id"),
             "trait_score": round(trait, 3) if looked_up else None,
             "looked_up": looked_up,
+            "from_pivots": cand.get("from_pivots") or [],
             "why": explain(contrib) if looked_up else NOT_LOOKED_UP,
             "free_on": cand.get("free_on") or [],
             "rent_on_yours": cand.get("rent_on_yours") or [],
@@ -223,6 +255,6 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
         })
     # Examined candidates first, best score first; unexamined ones trail.
     scored.sort(key=lambda d: (not d["looked_up"], -(d["trait_score"] or 0.0)))
-    picks = [s for s in scored if s["fits_tonight"]][:limit]
+    picks = _diversify([s for s in scored if s["fits_tonight"]], limit)
     shelved = [s for s in scored if not s["fits_tonight"]][:limit]
     return picks, shelved

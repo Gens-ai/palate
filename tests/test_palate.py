@@ -15,6 +15,8 @@ import random
 
 import pytest
 
+from collections import Counter
+
 from palate import constants as C
 from palate import picker, storage, taste_profile, tmdb
 from palate.sources import base as source_base
@@ -534,6 +536,65 @@ def test_the_deprecated_require_free_flag_still_constrains(con):
     assert tools._resolve_availability({}) == C.DEFAULT_AVAILABILITY
     assert tools._resolve_availability({"availability": "any"}) == "any"
     assert tools._resolve_availability({"availability": "nonsense"}) == C.DEFAULT_AVAILABILITY
+
+
+def test_interleave_gives_every_pivot_a_share_of_the_pool(con):
+    """The bug this replaced: concatenation handed pivot 1 the whole pool.
+
+    TMDB returns a full page per pivot against a pool of 24, so extend() then
+    truncate gave pivot 1 about 20 slots, pivot 2 the remainder, and every
+    pivot after that nothing at all.
+    """
+    from palate import tools
+
+    groups = [[f"{name}-{i}" for i in range(20)]
+              for name in ("west", "anim", "noir", "docu", "scifi", "comedy")]
+    pool = tools._interleave(groups)[:24]
+    reached = {item.split("-")[0] for item in pool}
+    assert reached == {"west", "anim", "noir", "docu", "scifi", "comedy"}, \
+        f"only {reached} reached the pool"
+    per_source = Counter(item.split("-")[0] for item in pool)
+    assert set(per_source.values()) == {4}, f"uneven split: {per_source}"
+
+    # And the old behaviour, for contrast.
+    naive = [x for g in groups for x in g][:24]
+    assert {i.split("-")[0] for i in naive} == {"west", "anim"}
+
+
+def test_interleave_tolerates_uneven_and_empty_groups(con):
+    from palate import tools
+
+    assert tools._interleave([]) == []
+    assert tools._interleave([[], []]) == []
+    assert tools._interleave([["a"], ["b", "c", "d"]]) == ["a", "b", "c", "d"]
+
+
+def test_no_more_than_two_picks_trace_to_one_favourite(con):
+    ordered = [{"title": f"west{i}", "from_pivots": ["Across the Great Divide"]}
+               for i in range(5)]
+    ordered += [{"title": "anim1", "from_pivots": ["Coraline"]},
+                {"title": "noir1", "from_pivots": ["The Big Lebowski"]}]
+    picks = picker._diversify(ordered, limit=4)
+    counts = Counter(p["from_pivots"][0] for p in picks)
+    assert counts["Across the Great Divide"] == 2
+    assert len(picks) == 4
+    assert {"anim1", "noir1"} <= {p["title"] for p in picks}
+
+
+def test_the_diversity_cap_never_returns_fewer_picks_than_asked(con):
+    """A preference between eligible candidates, not a reason to answer less."""
+    ordered = [{"title": f"west{i}", "from_pivots": ["Across the Great Divide"]}
+               for i in range(6)]
+    picks = picker._diversify(ordered, limit=5)
+    assert len(picks) == 5, "the cap must be filled from what it held back"
+    assert [p["title"] for p in picks] == [f"west{i}" for i in range(5)], \
+        "and the held-back items must come back in score order"
+
+
+def test_a_candidate_several_favourites_recommend_keeps_all_of_them(con):
+    """Being recommended by three favourites is a stronger signal than one."""
+    ordered = [{"title": "both", "from_pivots": ["Coraline", "Ink"]}]
+    assert picker._diversify(ordered, limit=3)[0]["from_pivots"] == ["Coraline", "Ink"]
 
 
 def test_a_tagging_rules_change_invalidates_the_cache_but_keeps_the_ledger(con):

@@ -57,7 +57,7 @@ if not KEY:
 print(f"key loaded from {WHERE}: {len(KEY)} chars")
 
 palate = load_plugin()  # noqa: E402
-from palate import storage, tmdb  # noqa: E402
+from palate import picker, storage, tmdb  # noqa: E402
 
 
 class Ctx:
@@ -193,11 +193,26 @@ def main():
         "a rental pick must name the accepted provider it came from"
     print(f"    price data: {rent2['availability']['note'][:70]}...")
 
+    print("\n[6c] pivot spread: no single favourite may own the answer")
     free_only = call(ctx, "palate_pick", medium="film", max_runtime_min=100,
                      availability="free", limit=8)
     assert all(p["cost"] == "free" for p in free_only["picks"]), \
         "availability='free' must exclude rentals even once a provider is accepted"
-    print("    availability='free' still excludes them: ok")
+    print("    availability='free' still excludes rentals: ok")
+    spread = call(ctx, "palate_pick", medium="film", availability="any", limit=6)
+    from collections import Counter as _C
+    attributed = [p for p in spread["picks"] if p.get("from_pivots")]
+    if attributed:
+        counts = _C(p["from_pivots"][0] for p in attributed)
+        for src, n in counts.most_common():
+            print(f"    {n} pick(s) via {src}")
+        assert max(counts.values()) <= picker.PICKS_PER_PIVOT, (
+            f"{max(counts.values())} picks trace to one favourite, cap is "
+            f"{picker.PICKS_PER_PIVOT}; the pool or the cap is not working")
+        print(f"    {len(counts)} distinct favourite(s) represented, "
+              f"cap {picker.PICKS_PER_PIVOT} per favourite: ok")
+    else:
+        print("    (no pivot attribution on this path)")
 
     print("\n[7] no constraints, to prove the shelving was the constraint")
     for p in call(ctx, "palate_pick", medium="film", limit=3)["picks"]:
