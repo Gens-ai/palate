@@ -11,8 +11,47 @@ you would love on a free Sunday is shelved rather than silently dropped when
 you have forty minutes and no patience.
 """
 
+import math
+
 from . import constants as C
 from .taste_profile import tag_key
+
+# Below this many tagged works the ledger is too small to estimate how common
+# a tag is, so weighting would be noise dressed as correction. Fall back to
+# flat weights and say nothing.
+MIN_DOCS_FOR_IDF = 8
+
+# Ceiling on the rarity multiplier. A tag seen twice in a 30-work corpus is
+# not demonstrably rarer than one seen twice in a 3000-work corpus, but an
+# uncapped log would claim it is by a factor of five. Capping keeps rarity a
+# tie-breaker between tag kinds rather than the dominant term, and stops the
+# multiplier growing without bound as the ledger fills.
+IDF_CAP = 2.0
+
+
+def tag_idf(con):
+    """Inverse document frequency per tag, over every work Palate has tagged.
+
+    Without this, a keyword carried by tens of thousands of films ("based on
+    novel or book", "friendship") counts the same as a shared director, and it
+    wins on sheer frequency: it appears in more explanations and drags generic
+    candidates up the ranking. The corpus here is the works already in the
+    ledger -- the user's own plus every candidate ever hydrated -- which is a
+    sample of exactly the neighbourhood being searched.
+
+    A tag present on every work gets 0, not a negative: it must contribute
+    nothing rather than invert the sign of the contribution.
+    """
+    total = con.execute("SELECT COUNT(DISTINCT work_id) FROM work_tags").fetchone()[0]
+    if total < MIN_DOCS_FOR_IDF:
+        return {}, total
+    idf = {}
+    for row in con.execute(
+            "SELECT kind, value, COUNT(DISTINCT work_id) AS n FROM work_tags "
+            "GROUP BY kind, value"):
+        idf[tag_key(row["kind"], row["value"])] = min(
+            IDF_CAP, max(0.0, math.log(total / (1 + row["n"]))))
+    return idf, total
 
 
 def tag_net(verdicts):
@@ -27,16 +66,21 @@ def tag_net(verdicts):
     return net, who
 
 
-def _trait_score(cand_tags, net, who):
+def _trait_score(cand_tags, net, who, idf=None):
     if not cand_tags:
         return 0.0, []
+    idf = idf or {}
     total, contrib = 0.0, []
     for kind, value, weight in cand_tags:
         key = tag_key(kind, value)
         if key in net and net[key]:
-            c = net[key] * weight
-            total += c
-            contrib.append((key, c, who.get(key, [])[:3]))
+            # Rarity multiplier: a shared director should not be outvoted by
+            # three shared genres. Defaults to 1.0 when the corpus is too
+            # small to estimate rarity.
+            c = net[key] * weight * idf.get(key, 1.0)
+            if c:
+                total += c
+                contrib.append((key, c, who.get(key, [])[:3]))
     # Normalise by tag count: a work carrying forty keywords should not beat a
     # sparse one just by having more chances to match.
     total /= max(1.0, len(cand_tags) ** 0.5)
@@ -117,6 +161,7 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
     """
     state = state or {}
     net, who = tag_net(verdicts)
+    idf, corpus = tag_idf(con)
     scored = []
     for cand in candidates:
         if cand.get("work_id") in seen_ids:
@@ -127,7 +172,7 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
         # overlaps" claims a comparison that never happened, and it lets an
         # unexamined title outrank a genuinely matched one.
         looked_up = bool(tags)
-        trait, contrib = _trait_score(tags, net, who) if looked_up else (0.0, [])
+        trait, contrib = _trait_score(tags, net, who, idf) if looked_up else (0.0, [])
         axes = _axis_map(con, cand["work_id"]) if cand.get("work_id") else {}
         ok, fails, caveats = state_check(cand, state, axes)
         scored.append({
@@ -145,6 +190,7 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
             "fits_tonight": ok,
             "tonight_blockers": fails,
             "unchecked": caveats,
+            "rarity_weighted": bool(idf),
             "axes": {a: round(v[0], 2) for a, v in axes.items()},
         })
     # Examined candidates first, best score first; unexamined ones trail.

@@ -434,6 +434,173 @@ def test_export_contains_the_whole_ledger(con, tmp_path):
     json.dumps(data, default=str)  # must be serialisable
 
 
+def test_a_tagging_rules_change_invalidates_the_cache_but_keeps_the_ledger(con):
+    """Tags are cached per work, so a rules change must clear them.
+
+    Otherwise new installs get the new weighting while an existing ledger
+    keeps the old tags forever: _ensure_tags skips anything already tagged,
+    and nothing anywhere reports that the cache is stale.
+    """
+    wid = storage.upsert_work(con, medium="film", title="Burning", year=2018)
+    storage.set_tags(con, wid, [("keyword", "based on novel or book", 1.0),
+                                ("crew", "cast:Someone", 0.75)])
+    storage.add_verdict(con, work_id=wid, verdict="seen", reasons=["loved_it"], rating=9)
+    storage.set_service(con, "Mubi", "subscription")
+    con.execute("UPDATE settings SET value='1' WHERE key='tag_rules_version'")
+    con.commit()
+    assert storage.tags_for(con, wid), "tags present under the old rules"
+
+    fresh = storage.connect()          # simulates the next process after an upgrade
+    try:
+        assert storage.tags_for(fresh, wid) == [], "stale tags must be dropped"
+        assert fresh.execute("SELECT COUNT(*) FROM verdicts").fetchone()[0] == 1, \
+            "verdicts must survive"
+        assert fresh.execute(
+            "SELECT COUNT(*) FROM verdict_reasons").fetchone()[0] == 1, "reasons must survive"
+        assert len(storage.list_services(fresh)) == 1, "services must survive"
+        assert storage.get_setting(fresh, "tag_rules_version") == C.TAG_RULES_VERSION
+
+        again = storage.connect()
+        assert storage.get_setting(again, "tag_rules_version") == C.TAG_RULES_VERSION, \
+            "and it must not re-clear on every open"
+        again.close()
+    finally:
+        fresh.close()
+
+
+def test_structural_keywords_and_bit_part_cast_are_kept_out_of_the_signal():
+    """Provenance keywords are dropped; cast is weighted far below crew.
+
+    Found on first real use: "based on novel or book" appeared in three of
+    five explanations, and rarity weighting promoted a kids' cartoon because
+    it shared a voice actor with The Big Lebowski.
+    """
+    from palate import tmdb
+
+    det = {
+        "crew": [("director", "Rare Auteur"), ("director of photography", "A DP")],
+        "cast": ["Lead", "Second", "Third", "Fourth", "Fifth", "Sixth"],
+        "keywords": ["based on novel or book", "woman director", "duringcreditsstinger",
+                     "slow burn", "one location"],
+        "genres": ["Drama"],
+    }
+    rows = tmdb.tags_from_details(det)
+    by_kind = {}
+    for kind, value, weight in rows:
+        by_kind.setdefault(kind, {})[value] = weight
+
+    keywords = set(by_kind["keyword"])
+    assert keywords == {"slow burn", "one location"}, \
+        f"structural keywords leaked into the signal: {keywords}"
+
+    cast = {k: v for k, v in by_kind["crew"].items() if k.startswith("cast:")}
+    assert len(cast) == tmdb.CAST_LIMIT == 3, "only the top-billed few are kept"
+    assert all(v == tmdb.CAST_WEIGHT for v in cast.values())
+    assert by_kind["crew"]["director:Rare Auteur"] > 10 * tmdb.CAST_WEIGHT, \
+        "a shared director must dominate a shared actor"
+
+
+def test_the_rarity_multiplier_is_capped(con):
+    """An uncapped log lets a twice-seen tag claim unbounded informativeness."""
+    for i in range(40):
+        wid = storage.upsert_work(con, medium="film", title=f"W {i}", year=2000,
+                                  source="tmdb", source_id=f"C{i}")
+        tags = [("genre", "Drama", 0.5)]
+        if i < 2:
+            tags.append(("crew", "cast:Someone Rare", 0.2))
+        storage.set_tags(con, wid, tags)
+    idf, corpus = picker.tag_idf(con)
+    import math
+    assert math.log(corpus / 3) > picker.IDF_CAP, "the test corpus must exceed the cap"
+    assert idf["crew:cast:Someone Rare"] == picker.IDF_CAP
+
+
+def test_a_ubiquitous_tag_is_discounted_against_a_rare_one(con):
+    """Rarity weighting: a shared director must outweigh a shared genre.
+
+    Found on first real use. Without it, "based on novel or book" and "Drama"
+    appeared in four of six explanations and dragged generic candidates up the
+    ranking -- a keyword carried by tens of thousands of films counted the
+    same as a shared crew member.
+    """
+    # A corpus where "Drama" is on everything and the director is on two.
+    liked = []
+    for i in range(10):
+        wid = storage.upsert_work(con, medium="film", title=f"Liked {i}", year=2000 + i,
+                                  source="tmdb", source_id=f"L{i}")
+        tags = [("genre", "Drama", 0.5)]
+        if i < 2:
+            tags.append(("crew", "director:Rare Auteur", 3.0))
+        storage.set_tags(con, wid, tags)
+        storage.add_verdict(con, work_id=wid, verdict="seen", reasons=["loved_it"])
+        liked.append(wid)
+    verdicts = storage.verdicts_with_tags(con)
+
+    generic = storage.upsert_work(con, medium="film", title="Generic Drama",
+                                  source="tmdb", source_id="G1", runtime_min=100)
+    storage.set_tags(con, generic, [("genre", "Drama", 0.5)])
+    rare = storage.upsert_work(con, medium="film", title="Auteur Film",
+                               source="tmdb", source_id="R1", runtime_min=100)
+    storage.set_tags(con, rare, [("genre", "Drama", 0.5),
+                                 ("crew", "director:Rare Auteur", 3.0)])
+
+    idf, corpus = picker.tag_idf(con)
+    assert corpus >= picker.MIN_DOCS_FOR_IDF, "corpus must be large enough to weight"
+    assert idf["genre:Drama"] < idf["crew:director:Rare Auteur"]
+
+    candidates = [
+        {"work_id": generic, "title": "Generic Drama", "medium": "film",
+         "runtime_min": 100, "tags": storage.tags_for(con, generic)},
+        {"work_id": rare, "title": "Auteur Film", "medium": "film",
+         "runtime_min": 100, "tags": storage.tags_for(con, rare)},
+    ]
+    picks, _ = picker.rank(con, candidates, verdicts)
+    assert picks[0]["title"] == "Auteur Film"
+    assert picks[0]["rarity_weighted"] is True
+    assert "Rare Auteur" in picks[0]["why"], picks[0]["why"]
+
+
+def test_a_tag_on_every_work_contributes_nothing_rather_than_inverting(con):
+    """idf must floor at 0: a negative multiplier would flip the sign."""
+    for i in range(10):
+        wid = storage.upsert_work(con, medium="film", title=f"W {i}", year=2000 + i,
+                                  source="tmdb", source_id=f"W{i}")
+        storage.set_tags(con, wid, [("genre", "Drama", 0.5)])
+        storage.add_verdict(con, work_id=wid, verdict="seen", reasons=["loved_it"])
+    idf, _corpus = picker.tag_idf(con)
+    assert idf["genre:Drama"] == 0.0
+
+    verdicts = storage.verdicts_with_tags(con)
+    only_generic = storage.upsert_work(con, medium="film", title="Only Drama",
+                                       source="tmdb", source_id="OD", runtime_min=90)
+    storage.set_tags(con, only_generic, [("genre", "Drama", 0.5)])
+    picks, _ = picker.rank(con, [{
+        "work_id": only_generic, "title": "Only Drama", "medium": "film",
+        "runtime_min": 90, "tags": storage.tags_for(con, only_generic)}], verdicts)
+    assert picks[0]["trait_score"] == 0.0, "a universal tag must add nothing"
+    assert "cold guess" in picks[0]["why"], "and must not be offered as a reason"
+
+
+def test_rarity_weighting_is_declined_on_a_corpus_too_small_to_estimate_it(con):
+    """Below the threshold, fall back to flat weights and say so."""
+    wid = storage.upsert_work(con, medium="film", title="Lonely", year=2001,
+                              source="tmdb", source_id="X1")
+    storage.set_tags(con, wid, [("genre", "Drama", 0.5)])
+    storage.add_verdict(con, work_id=wid, verdict="seen", reasons=["loved_it"])
+    idf, corpus = picker.tag_idf(con)
+    assert idf == {} and corpus < picker.MIN_DOCS_FOR_IDF
+
+    verdicts = storage.verdicts_with_tags(con)
+    cand = storage.upsert_work(con, medium="film", title="Other", source="tmdb",
+                               source_id="X2", runtime_min=90)
+    storage.set_tags(con, cand, [("genre", "Drama", 0.5)])
+    picks, _ = picker.rank(con, [{
+        "work_id": cand, "title": "Other", "medium": "film", "runtime_min": 90,
+        "tags": storage.tags_for(con, cand)}], verdicts)
+    assert picks[0]["rarity_weighted"] is False
+    assert picks[0]["trait_score"] > 0, "flat weighting still scores the overlap"
+
+
 def test_the_key_is_never_read_from_the_environment(monkeypatch):
     """Regression for admission rule 11.
 

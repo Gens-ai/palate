@@ -57,6 +57,26 @@ def _get(api_key, path, **params):
 
 MEDIUM_TO_PATH = {"film": "movie", "tv": "tv"}
 
+# TMDB keywords that describe a work's provenance or production format rather
+# than the experience of watching it. They are common enough to pollute every
+# explanation and they say nothing about taste: "based on novel or book" is
+# shared by Coraline, The NeverEnding Story and tens of thousands of others.
+KEYWORD_STOPLIST = frozenset({
+    "based on novel or book", "based on short story", "based on comic",
+    "based on play or musical", "based on video game", "based on manga",
+    "based on young adult novel", "based on children's book",
+    "woman director", "live action remake", "remake", "reboot",
+    "duringcreditsstinger", "aftercreditsstinger", "3d", "imax",
+})
+
+# Crew roles carry craft; a sixth-billed actor carries coincidence. Cast is
+# kept because a shared lead is a weak signal, but weighted far below crew:
+# rarity weighting would otherwise let any shared bit-part actor outrank a
+# shared director, which is how a kids' cartoon surfaced off a Julianne Moore
+# voice role.
+CAST_LIMIT = 3
+CAST_WEIGHT = 0.2
+
 
 def search(api_key, medium, query, year=None):
     kind = MEDIUM_TO_PATH.get(medium)
@@ -95,7 +115,7 @@ def details(api_key, medium, tmdb_id):
         if job in ("director", "director of photography", "original music composer", "writer", "screenplay"):
             if member.get("name"):
                 crew.append((job, member["name"]))
-    cast = [c["name"] for c in (credits.get("cast") or [])[:6] if c.get("name")]
+    cast = [c["name"] for c in (credits.get("cast") or [])[:CAST_LIMIT] if c.get("name")]
 
     runtime = data.get("runtime")
     if runtime is None:
@@ -147,15 +167,18 @@ def tags_from_details(det):
 
     Crew is weighted above keywords on purpose: a shared director or
     cinematographer is a far stronger taste signal than a shared plot tag, and
-    it comes free in the same response.
+    it comes free in the same response. Cast sits below both, and structural
+    keywords are dropped entirely rather than discounted.
     """
     tags = []
     for job, name in det.get("crew") or []:
         weight = 3.0 if job == "director" else 2.0
         tags.append(("crew", f"{job}:{name}", weight))
-    for name in det.get("cast") or []:
-        tags.append(("crew", f"cast:{name}", 0.75))
+    for name in (det.get("cast") or [])[:CAST_LIMIT]:
+        tags.append(("crew", f"cast:{name}", CAST_WEIGHT))
     for kw in det.get("keywords") or []:
+        if kw.strip().lower() in KEYWORD_STOPLIST:
+            continue
         tags.append(("keyword", kw, 1.0))
     for g in det.get("genres") or []:
         tags.append(("genre", g, 0.5))

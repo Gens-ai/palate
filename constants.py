@@ -5,6 +5,15 @@ importer or a tool is how the two copies drift apart and a record starts
 importing by one route and failing by another.
 """
 
+# Bumped whenever the tagging rules change (weights, stoplist, what counts as
+# a signal). Tags are cached per work and _ensure_tags skips anything already
+# tagged, so without this stamp a rules change silently never reaches an
+# existing ledger: new installs get the new behaviour while the person who
+# asked for the change keeps the old one.
+#   1: initial
+#   2: cast capped at 3 and down-weighted, structural keywords dropped
+TAG_RULES_VERSION = 2
+
 PLUGIN_NAME = "palate"
 
 # Media Palate can hold a verdict on. Film and TV have adapters today; music

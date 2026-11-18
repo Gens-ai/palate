@@ -203,12 +203,22 @@ def palate_pick(params, **_kwargs):
         picks, shelved = picker.rank(con, enriched, verdicts, state=state,
                                      seen_ids=seen, limit=limit)
         prof = taste_profile.build(verdicts)
+        _idf, corpus = picker.tag_idf(con)
         return _ok({
             "ok": True,
             "candidate_strategy": how,
             "picks": picks,
             "shelved_for_another_night": shelved,
             "ledger": storage.counts(con),
+            "scoring": {
+                "rarity_weighted": bool(_idf),
+                "tagged_corpus": corpus,
+                "note": ("Common tags are discounted by how many works carry them, so a "
+                         "shared director outweighs a shared genre."
+                         if _idf else
+                         f"Flat tag weights: only {corpus} tagged works, "
+                         f"{picker.MIN_DOCS_FOR_IDF} needed before rarity can be estimated."),
+            },
             "profile_status": prof["message"],
             "services_configured": service_names or None,
             "region": region,

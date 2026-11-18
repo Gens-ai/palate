@@ -108,7 +108,30 @@ def connect() -> sqlite3.Connection:
     con.executescript(SCHEMA)
     con.commit()
     con.row_factory = sqlite3.Row
+    _invalidate_stale_tags(con)
     return con
+
+
+def _invalidate_stale_tags(con):
+    """Drop the tag cache when the tagging rules have changed under it.
+
+    The cache exists so a work is only hydrated once, which also means a
+    change to weights or the keyword stoplist would never reach a ledger that
+    already has tags. Clearing is safe: tags are derived data and refetch on
+    the next pick. Verdicts, reasons and services are untouched.
+    """
+    try:
+        row = con.execute("SELECT value FROM settings WHERE key='tag_rules_version'").fetchone()
+        stored = int(json.loads(row["value"])) if row else 0
+    except (ValueError, TypeError, KeyError, sqlite3.Error):
+        stored = 0
+    if stored >= C.TAG_RULES_VERSION:
+        return
+    con.execute("DELETE FROM work_tags")
+    con.execute("INSERT INTO settings (key, value) VALUES ('tag_rules_version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps(C.TAG_RULES_VERSION),))
+    con.commit()
 
 
 # ---------------------------------------------------------------------------
