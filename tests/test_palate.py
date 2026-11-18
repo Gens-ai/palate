@@ -16,7 +16,7 @@ import random
 import pytest
 
 from palate import constants as C
-from palate import picker, storage, taste_profile
+from palate import picker, storage, taste_profile, tmdb
 from palate.sources import base as source_base
 from palate.sources import letterboxd_csv
 
@@ -432,6 +432,108 @@ def test_export_contains_the_whole_ledger(con, tmp_path):
     assert data["verdict_reasons"][0]["reason"] == "loved_it"
     assert len(data["services"]) == 1
     json.dumps(data, default=str)  # must be serialisable
+
+
+def _cand(wid, con, free_on=(), rent_on_yours=(), rent_on=()):
+    return {"work_id": wid, "title": "Thing", "medium": "film", "runtime_min": 100,
+            "tags": storage.tags_for(con, wid), "free_on": list(free_on),
+            "rent_on_yours": list(rent_on_yours), "rent_on": list(rent_on)}
+
+
+def test_a_rental_is_offered_only_when_the_user_accepts_that_provider(con):
+    """Per-provider consent: Amazon rentals may be fine and Apple's may not."""
+    _seed_liked_director(con)
+    verdicts = storage.verdicts_with_tags(con)
+    wid = storage.upsert_work(con, medium="film", title="Rentable", source="tmdb",
+                              source_id="RR", runtime_min=100)
+    storage.set_tags(con, wid, [("crew", "director:Lee Chang-dong", 3.0)])
+    storage.set_service(con, "Amazon Video", "rent")
+
+    accepted = _cand(wid, con, rent_on_yours=["Amazon Video"], rent_on=["Amazon Video"])
+    picks, shelved = picker.rank(con, [accepted], verdicts,
+                                 state={"availability": "free_or_rent", "has_services": True})
+    assert picks and picks[0]["cost"] == "rent"
+    assert picks[0]["rent_on_yours"] == ["Amazon Video"]
+    assert shelved == []
+
+    # Same title, but it only rents from a storefront the user did not declare.
+    refused = _cand(wid, con, rent_on=["Apple TV Store"])
+    picks, shelved = picker.rank(con, [refused], verdicts,
+                                 state={"availability": "free_or_rent", "has_services": True})
+    assert picks == [] and len(shelved) == 1
+    assert "not on a rental provider you accept" in shelved[0]["tonight_blockers"][0]
+    assert "Apple TV Store" in shelved[0]["tonight_blockers"][0]
+
+
+def test_free_mode_rejects_a_rental_the_user_would_otherwise_accept(con):
+    _seed_liked_director(con)
+    verdicts = storage.verdicts_with_tags(con)
+    wid = storage.upsert_work(con, medium="film", title="Rentable", source="tmdb",
+                              source_id="RR", runtime_min=100)
+    storage.set_tags(con, wid, [("crew", "director:Lee Chang-dong", 3.0)])
+    cand = _cand(wid, con, rent_on_yours=["Amazon Video"], rent_on=["Amazon Video"])
+    picks, shelved = picker.rank(con, [cand], verdicts,
+                                 state={"availability": "free", "has_services": True})
+    assert picks == []
+    assert "not free on your services" in shelved[0]["tonight_blockers"][0]
+
+
+def test_the_buckets_do_not_cross(con):
+    """A rent provider must not make a title look free, and vice versa."""
+    av = {"flatrate": ["Hulu"], "free": ["Tubi TV"], "ads": [],
+          "rent": ["Amazon Video"], "buy": ["Apple TV Store"]}
+    assert tmdb.free_on(av, ["Hulu", "Tubi TV"]) == ["Hulu", "Tubi TV"]
+    assert tmdb.free_on(av, ["Amazon Video"]) == [], \
+        "a rental storefront must never register as free"
+    assert tmdb.paid_on(av, ["Amazon Video", "Apple TV Store"]) == \
+        ["Amazon Video", "Apple TV Store"]
+    assert tmdb.paid_on(av, ["Hulu"]) == [], \
+        "a subscription must never satisfy a rental request"
+
+
+def test_availability_with_no_services_is_unchecked_not_satisfied(con):
+    """The honesty rule: an unverifiable constraint is reported, not passed."""
+    _seed_liked_director(con)
+    verdicts = storage.verdicts_with_tags(con)
+    wid = storage.upsert_work(con, medium="film", title="Unknown Access",
+                              source="tmdb", source_id="UA", runtime_min=100)
+    storage.set_tags(con, wid, [("crew", "director:Lee Chang-dong", 3.0)])
+    picks, _ = picker.rank(con, [_cand(wid, con)], verdicts,
+                           state={"availability": "free", "has_services": False})
+    assert picks[0]["fits_tonight"] is True
+    assert picks[0]["cost"] == "unknown"
+    assert any("no services declared" in c for c in picks[0]["unchecked"])
+
+
+def test_any_mode_applies_no_availability_filter(con):
+    _seed_liked_director(con)
+    verdicts = storage.verdicts_with_tags(con)
+    wid = storage.upsert_work(con, medium="film", title="Nowhere", source="tmdb",
+                              source_id="NW", runtime_min=100)
+    storage.set_tags(con, wid, [("crew", "director:Lee Chang-dong", 3.0)])
+    picks, _ = picker.rank(con, [_cand(wid, con)], verdicts,
+                           state={"availability": "any", "has_services": True})
+    assert picks[0]["fits_tonight"] is True
+    assert picks[0]["cost"] == "unavailable", "still reported honestly as costing something"
+
+
+def test_rent_and_buy_are_valid_service_kinds(con):
+    storage.set_service(con, "Amazon Video", "rent")
+    storage.set_service(con, "Apple TV Store", "buy")
+    kinds = {s["name"]: s["kind"] for s in storage.list_services(con)}
+    assert kinds == {"Amazon Video": "rent", "Apple TV Store": "buy"}
+    assert "rent" in C.SERVICE_KINDS and "rent" not in C.FREE_AT_POINT_OF_USE
+
+
+def test_the_deprecated_require_free_flag_still_constrains(con):
+    """An older caller must not silently lose its constraint."""
+    from palate import tools
+
+    mode = tools._resolve_availability({"require_free": True})
+    assert mode == "free"
+    assert tools._resolve_availability({}) == C.DEFAULT_AVAILABILITY
+    assert tools._resolve_availability({"availability": "any"}) == "any"
+    assert tools._resolve_availability({"availability": "nonsense"}) == C.DEFAULT_AVAILABILITY
 
 
 def test_a_tagging_rules_change_invalidates_the_cache_but_keeps_the_ledger(con):

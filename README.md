@@ -96,16 +96,35 @@ licence — so no scraper, and nothing to repair when a site changes its markup.
 What counts as watchable is broader than a subscription list, and this is where
 commercial recommenders quietly fail you:
 
-| Kind | Example |
-|---|---|
-| `subscription` | Netflix, Max, Criterion Channel |
-| `free_ads` | Tubi, Pluto |
-| `library` | Kanopy or Hoopla on a library card — an enormous free catalogue almost nothing surfaces |
-| `owned` | films you already bought |
-| `local` | files and discs |
+| Kind | Example | Costs |
+|---|---|---|
+| `subscription` | Netflix, Max, Criterion Channel | nothing more |
+| `free_ads` | Tubi, The Roku Channel, Plex, Xumo | nothing |
+| `library` | Kanopy or Hoopla on a library card — an enormous free catalogue almost nothing surfaces | nothing |
+| `owned` | films you already bought | nothing |
+| `local` | files and discs | nothing |
+| `rent` | a storefront you're willing to rent from | per title |
+| `buy` | a storefront you're willing to buy from | per title |
 
-Ranking prefers what costs you nothing more, and says plainly when something is
-a £4 rental instead of burying it.
+Rentals are **per provider, opt-in**. Declaring Amazon Video as `rent` does not
+sign you up for every storefront on earth, because wanting Amazon rentals and
+refusing the rest is a perfectly normal position. Ask for picks three ways:
+
+```
+availability="free"           only what costs nothing more  (default)
+availability="free_or_rent"   also rentals from providers you accept
+availability="any"            ignore access entirely, explore taste
+```
+
+Every suggestion carries its cost tier, named out loud, so a paid option can
+never be dressed up as a free one.
+
+**What it cannot tell you is the price.** TMDB reports *which* providers rent a
+title and not what they charge, so you get "rentable on Amazon Video" and never
+"$3.99". JustWatch has the prices; TMDB doesn't pass them through, and scraping
+JustWatch directly is exactly the fragility this plugin exists to avoid. So
+there is no "rentals under five dollars" filter, and there won't be an invented
+one.
 
 ## It declines to guess
 

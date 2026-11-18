@@ -91,14 +91,28 @@ def _resolve(con, api_key, medium, title, year=None):
 # palate_pick
 # ---------------------------------------------------------------------------
 
+def _resolve_availability(params):
+    """Single owner of the availability mapping.
+
+    `require_free` predates the three-state mode; honour it so an older caller
+    keeps its constraint instead of silently losing it, and fall back to the
+    default on anything unrecognised rather than filtering by a typo.
+    """
+    mode = params.get("availability")
+    if mode in C.AVAILABILITY_MODES:
+        return mode
+    return "free" if params.get("require_free") else C.DEFAULT_AVAILABILITY
+
+
 def palate_pick(params, **_kwargs):
     medium = params.get("medium") or "film"
     limit = int(params.get("limit") or 5)
+    mode = _resolve_availability(params)
     state = {
         "max_runtime_min": params.get("max_runtime_min"),
         "max_load": params.get("max_load"),
         "max_bleakness": params.get("max_bleakness"),
-        "require_free": bool(params.get("require_free")),
+        "availability": mode,
     }
     try:
         api_key = _api_key()
@@ -129,7 +143,10 @@ def palate_pick(params, **_kwargs):
             verdicts = storage.verdicts_with_tags(con, medium=medium)
 
         services = storage.list_services(con)
+        free_names = [s["name"] for s in services if s["kind"] in C.FREE_AT_POINT_OF_USE]
+        paid_names = [s["name"] for s in services if s["kind"] in C.PAID_PER_TITLE]
         service_names = [s["name"] for s in services]
+        state["has_services"] = bool(free_names or paid_names)
         region = storage.region(con)
 
         note = " ".join(str(params.get(k)) for k in ("seed_title",) if params.get(k))
@@ -186,19 +203,21 @@ def palate_pick(params, **_kwargs):
             fetched += 1 if did_fetch else 0
             row = con.execute("SELECT runtime_min FROM works WHERE id=?", (wid,)).fetchone()
 
-            free_on, rent_on = [], []
+            free_on, rent_on, rent_on_yours = [], [], []
             if service_names:
                 try:
                     avail, _cached = tmdb.cached_availability(
                         con, api_key, wid, medium, c["tmdb_id"], region)
-                    free_on = tmdb.free_on(avail, service_names)
+                    free_on = tmdb.free_on(avail, free_names)
+                    rent_on_yours = tmdb.paid_on(avail, paid_names)
                     rent_on = (avail.get("rent") or [])[:3]
                 except tmdb.TmdbError:
                     pass
 
             enriched.append({**c, "work_id": wid, "tags": tags,
                              "runtime_min": row["runtime_min"] if row else None,
-                             "free_on": free_on, "rent_on": rent_on})
+                             "free_on": free_on, "rent_on": rent_on,
+                             "rent_on_yours": rent_on_yours})
 
         picks, shelved = picker.rank(con, enriched, verdicts, state=state,
                                      seen_ids=seen, limit=limit)
@@ -220,6 +239,16 @@ def palate_pick(params, **_kwargs):
                          f"{picker.MIN_DOCS_FOR_IDF} needed before rarity can be estimated."),
             },
             "profile_status": prof["message"],
+            "availability": {
+                "mode": mode,
+                "free_services": free_names or None,
+                "rental_services_you_accept": paid_names or None,
+                "note": ("Prices are not available: TMDB reports which providers rent a "
+                         "title but not what they charge, so a rental is named, never priced."
+                         if mode != "free" else
+                         "Only things free at point of use. Pass availability='free_or_rent' "
+                         "to include rentals from providers the user has declared."),
+            },
             "services_configured": service_names or None,
             "region": region,
             "attribution": tmdb.ATTRIBUTION,

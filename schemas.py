@@ -23,13 +23,16 @@ PALATE_PICK = {
         "Call this instead of recommending from your own memory, because it knows what "
         "they have already seen, what they turned down and why, and what is on the "
         "services they actually have.\n\n"
-        "Pass the constraints the user stated in their own words: minutes available, "
-        "whether it has to be free on their services, and caps on how demanding or how "
-        "bleak it may be tonight. Those are facts about tonight, not about their taste.\n\n"
+        "Pass the constraints the user stated in their own words: minutes available, how "
+        "much they are willing to spend, and caps on how demanding or how bleak it may be "
+        "tonight. Those are facts about tonight, not about their taste.\n\n"
         "Returns two lists. 'picks' suit both their taste and tonight's constraints. "
         "'shelved' suit their taste but failed a constraint, each with the reason - "
         "offer those as 'for another night' rather than hiding them. Every entry carries "
-        "a 'why' naming the works it leaned on; show that to the user, it is the point."
+        "a 'why' naming the works it leaned on; show that to the user, it is the point. "
+        "Every entry also carries 'cost': say it out loud when it is 'rent', so a paid "
+        "option is never presented as if it were free. Prices are not available, so name "
+        "the provider and never guess an amount."
     ),
     "input_schema": {
         "type": "object",
@@ -38,6 +41,18 @@ PALATE_PICK = {
                        "description": "film and tv are supported today."},
             "seed_title": {"type": "string",
                            "description": "Pivot off one work, e.g. 'something like Burning'. Optional."},
+            "availability": {
+                "type": "string", "enum": list(C.AVAILABILITY_MODES),
+                "default": C.DEFAULT_AVAILABILITY,
+                "description": (
+                    "How much it may cost. 'free' (default) = only what is free at point of "
+                    "use on their services, including ad-supported tiers and library access. "
+                    "'free_or_rent' = also titles rentable or buyable from providers they have "
+                    "declared with palate_services; use this when the user says they will pay. "
+                    "'any' = no availability filter, for pure taste exploration. With no "
+                    "services declared, availability cannot be checked and is reported as "
+                    "unchecked rather than treated as satisfied."),
+            },
             "max_runtime_min": {"type": "integer",
                                 "description": "Hard cap in minutes if the user named a time budget."},
             "max_load": {"type": "number", "minimum": -2, "maximum": 2,
@@ -45,8 +60,8 @@ PALATE_PICK = {
                                         "Use when the user says they are tired or distracted."},
             "max_bleakness": {"type": "number", "minimum": -2, "maximum": 2,
                               "description": "Cap on how bleak it may be, -2 warm to +2 devastating."},
-            "require_free": {"type": "boolean", "default": False,
-                             "description": "Only things free at point of use on their configured services."},
+            "require_free": {"type": "boolean",
+                             "description": "Deprecated alias for availability='free'. Prefer availability."},
             "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 10},
         },
     },
@@ -105,16 +120,27 @@ PALATE_SERVICES = {
     "name": "palate_services",
     "description": (
         "List or edit which services the user can actually watch on. This is what makes "
-        "'free tonight' meaningful, and it covers more than subscriptions: free ad-supported "
-        "tiers, library access through Kanopy or Hoopla, things they own, and local files. "
-        "Region matters, because availability is region-locked."
+        "'free tonight' meaningful, and it covers more than subscriptions: free "
+        "ad-supported tiers, library access through Kanopy or Hoopla, things they own, "
+        "and local files.\n\n"
+        "It also records which providers they are willing to PAY per title on: add a "
+        "provider with kind='rent' or kind='buy' and palate_pick will offer titles from "
+        "it when called with availability='free_or_rent'. Add only providers the user "
+        "named; someone may accept Amazon rentals and refuse everything else. Prices are "
+        "not available from the data, so never imply an amount.\n\n"
+        "Region matters, because availability is region-locked. Use provider names as "
+        "TMDB and JustWatch spell them, e.g. 'Amazon Video', 'Apple TV Store', "
+        "'Tubi TV', 'The Roku Channel', 'HBO Max'."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": ["list", "add", "remove"], "default": "list"},
-            "name": {"type": "string", "description": "Provider name as TMDB/JustWatch spell it, e.g. 'Netflix', 'Max', 'Criterion Channel'."},
-            "kind": {"type": "string", "enum": list(C.SERVICE_KINDS)},
+            "name": {"type": "string", "description": "Provider name as TMDB/JustWatch spell it."},
+            "kind": {"type": "string", "enum": list(C.SERVICE_KINDS),
+                     "description": ("subscription, free_ads, library, owned and local are free at "
+                                     "point of use. rent and buy cost money per title and only "
+                                     "count when availability='free_or_rent'.")},
             "region": {"type": "string", "description": "ISO country code, e.g. US, GB. Default US."},
         },
     },

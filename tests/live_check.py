@@ -123,30 +123,27 @@ def main():
         print(f"    {title}: taste={out['learned_as_taste']} "
               f"tonight={out['recorded_as_tonight_only']}")
 
-    # THE CHECK THAT MATTERS. Print the intermediate the algorithm consumes,
-    # not just the final answer: feature rows next to verdict count is what
-    # exposes a one-sided pipeline instantly.
-    print("\n[4] pipeline intermediates (a one-sided pipeline shows up here)")
+    # THE CHECK THAT MATTERS, but it has to run AFTER a pick: hydration of the
+    # user's own works happens inside palate_pick, so measuring here first
+    # would always read zero and the detector would never fire.
+    print("\n[4] pipeline intermediates, pre-pick (hydration happens inside the pick)")
     con = storage.connect()
-    counts = storage.counts(con)
     verdicts = storage.verdicts_with_tags(con, medium="film")
-    own_tagged = sum(1 for v in verdicts if v["tags"])
-    print(f"    taste-bearing verdicts: {len(verdicts)}")
-    print(f"    of those, carrying tags: {own_tagged}   <-- 0 here means the "
-          f"user's own side was never hydrated")
-    print(f"    ledger: {counts}")
+    print(f"    taste-bearing verdicts: {len(verdicts)}  "
+          f"carrying tags: {sum(1 for v in verdicts if v['tags'])} (expected 0 cold)")
 
     print("\n[5] palate_pick, cold cache: 100 minutes, free on my services")
     t0 = time.time()
     out = call(ctx, "palate_pick", medium="film", max_runtime_min=100,
-               require_free=True, limit=5)
+               availability="free", limit=5)
     cold = time.time() - t0
     assert out.get("ok"), out
     print(f"    strategy: {out['candidate_strategy']}  ({cold:.1f}s)")
+    print(f"    availability mode: {out['availability']['mode']}")
     unexamined = [p for p in out["picks"] if not p["looked_up"]]
     for p in out["picks"]:
         print(f"    > {p['title']} ({p['year']}) {p['runtime_min']} min  "
-              f"score={p['trait_score']}  free_on={p['free_on'] or '-'}")
+              f"score={p['trait_score']}  cost={p['cost']}  free_on={p['free_on'] or '-'}")
         print(f"      why: {p['why']}")
         if p["unchecked"]:
             print(f"      unchecked: {p['unchecked']}")
@@ -157,12 +154,49 @@ def main():
         f"{len(unexamined)} pick(s) were never looked up; size DETAIL_BUDGET "
         "to CANDIDATE_POOL so the best match is not the one nobody examined")
 
+    # Now the detector can actually fire.
+    con2 = storage.connect()
+    verdicts2 = storage.verdicts_with_tags(con2, medium="film")
+    own_tagged = sum(1 for v in verdicts2 if v["tags"])
+    print(f"\n    post-pick: {own_tagged} of {len(verdicts2)} of the user's own works "
+          f"carry tags   <-- 0 here means the ledger side was never hydrated")
+    assert own_tagged > 0, "the user's own works were never tagged; the net is empty"
+    assert any((p["trait_score"] or 0) != 0 for p in out["picks"]), \
+        "every score is zero, which means nothing was actually compared"
+
     print("\n[6] warm cache: materially better results here means [5] was partial")
     t0 = time.time()
     warm = call(ctx, "palate_pick", medium="film", max_runtime_min=100,
-                require_free=True, limit=5)
+                availability="free", limit=5)
     print(f"    {time.time() - t0:.1f}s; top: "
           f"{[(p['title'], p['trait_score']) for p in warm['picks'][:3]]}")
+
+    print("\n[6b] rentals: declared providers only")
+    before = len(warm["picks"])
+    rent = call(ctx, "palate_pick", medium="film", max_runtime_min=100,
+                availability="free_or_rent", limit=8)
+    print(f"    with no rental provider declared: {len(rent['picks'])} picks "
+          f"(free-only gave {before})")
+    assert all(p["cost"] == "free" for p in rent["picks"]), \
+        "nothing may be offered as a rental before a provider is accepted"
+
+    call(ctx, "palate_services", action="add", name="Amazon Video", kind="rent")
+    rent2 = call(ctx, "palate_pick", medium="film", max_runtime_min=100,
+                 availability="free_or_rent", limit=8)
+    paid = [p for p in rent2["picks"] if p["cost"] == "rent"]
+    print(f"    after accepting Amazon Video: {len(rent2['picks'])} picks, "
+          f"{len(paid)} of them rentals")
+    for p in paid[:3]:
+        print(f"      $ {p['title']} ({p['year']})  rent from {p['rent_on_yours']}")
+    assert all(p["rent_on_yours"] for p in paid), \
+        "a rental pick must name the accepted provider it came from"
+    print(f"    price data: {rent2['availability']['note'][:70]}...")
+
+    free_only = call(ctx, "palate_pick", medium="film", max_runtime_min=100,
+                     availability="free", limit=8)
+    assert all(p["cost"] == "free" for p in free_only["picks"]), \
+        "availability='free' must exclude rentals even once a provider is accepted"
+    print("    availability='free' still excludes them: ok")
 
     print("\n[7] no constraints, to prove the shelving was the constraint")
     for p in call(ctx, "palate_pick", medium="film", limit=3)["picks"]:

@@ -127,10 +127,36 @@ def state_check(cand, state, axes):
         elif known[0] > cap:
             fails.append(f"{axis} scored {known[0]:+.0f} against your cap of {cap:+.0f}")
 
-    if state.get("require_free") and not cand.get("free_on"):
-        where = cand.get("rent_on") or []
-        fails.append("not free on your services" + (f" (rental on {', '.join(where[:2])})" if where else ""))
+    mode = state.get("availability") or C.DEFAULT_AVAILABILITY
+    if mode != "any":
+        if not state.get("has_services"):
+            # Nothing to filter against. Saying "fits" would claim a check that
+            # never happened, so report it instead of quietly passing.
+            caveats.append("no services declared, so availability was not checked")
+        elif not cand.get("free_on"):
+            rentable = cand.get("rent_on_yours") or []
+            if mode == "free":
+                where = cand.get("rent_on") or []
+                fails.append(
+                    "not free on your services"
+                    + (f" (rental on {', '.join(where[:2])})" if where else ""))
+            elif not rentable:
+                where = cand.get("rent_on") or []
+                fails.append(
+                    "not free, and not on a rental provider you accept"
+                    + (f" (rents from {', '.join(where[:2])})" if where else ""))
     return (not fails), fails, caveats
+
+
+def cost_of(cand, state):
+    """What this would cost the user, named rather than implied."""
+    if cand.get("free_on"):
+        return "free"
+    if cand.get("rent_on_yours"):
+        return "rent"
+    if not state.get("has_services"):
+        return "unknown"
+    return "unavailable"
 
 
 def explain(contrib):
@@ -186,7 +212,9 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
             "looked_up": looked_up,
             "why": explain(contrib) if looked_up else NOT_LOOKED_UP,
             "free_on": cand.get("free_on") or [],
+            "rent_on_yours": cand.get("rent_on_yours") or [],
             "rent_on": cand.get("rent_on") or [],
+            "cost": cost_of(cand, state),
             "fits_tonight": ok,
             "tonight_blockers": fails,
             "unchecked": caveats,

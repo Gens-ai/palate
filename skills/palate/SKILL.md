@@ -53,6 +53,26 @@ of titles is what every other recommender already does badly.
 constraint about tonight. Offer them as exactly that, with the blocker named.
 Do not silently drop them, and do not pretend the constraint was about taste.
 
+### Money
+
+`availability` controls what a pick may cost:
+
+- **`free`** (default) — only what is free at point of use: subscriptions,
+  ad-supported tiers, library access, things they own, local files.
+- **`free_or_rent`** — also titles rentable or buyable from providers the user
+  has declared. Use it when they say they will pay for something.
+- **`any`** — no availability filter, for exploring taste regardless of access.
+
+Every entry carries `cost`. **Say it out loud when it is `rent`** — a paid
+option must never be presented as though it were free. Name the provider and
+**never guess a price**: TMDB reports who rents a title, not what they charge,
+so there is no price data to quote.
+
+Add rental providers only when the user names them. Someone may happily rent
+from Amazon and refuse every other storefront, so
+`palate_services(action="add", name="Amazon Video", kind="rent")` is a
+per-provider decision, not a blanket setting.
+
 ## Honesty
 
 `palate_profile` returns `established` affinities and, separately,
@@ -66,9 +86,12 @@ evidence yet — say that plainly; it is a feature, and picks still work.
 - No TMDB key: `palate_pick` returns `needs_setup`. Tell them to get a free key
   at themoviedb.org (account settings → API) and run
   `hermes config set plugins.entries.palate.settings.tmdb_api_key <key>`.
-- No services configured: availability is unknown, so `require_free` cannot
-  work. Offer `palate_services(action="add", ...)`, and remember that library
-  access (Kanopy, Hoopla) and local files count as free at point of use.
+- No services configured: availability cannot be checked, so it is reported in
+  `unchecked` rather than treated as satisfied. Offer
+  `palate_services(action="add", ...)`. Free ad-supported services (Tubi, The
+  Roku Channel, Plex, Xumo Play, YouTube Free) need no account at all and are
+  worth suggesting; Kanopy and Hoopla need a library card, so ask before
+  adding them rather than assuming one.
 - Empty ledger: `palate_import` seeds it from a Letterboxd or Trakt CSV the
   user exports themselves. Always `mode="probe"` first, show what it parsed,
   then `mode="apply"` once they confirm.

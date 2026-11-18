@@ -97,10 +97,20 @@ SERVICE_KINDS = (
     "subscription",  # Netflix, Max, Criterion Channel
     "free_ads",      # Tubi, Pluto
     "library",       # Kanopy / Hoopla via a library card
-    "owned",         # bought digital
+    "owned",         # bought digital, already yours
     "local",         # files, discs
+    "rent",          # a provider you are willing to rent from, per title
+    "buy",           # a provider you are willing to buy from, per title
 )
 FREE_AT_POINT_OF_USE = ("subscription", "free_ads", "library", "owned", "local")
+PAID_PER_TITLE = ("rent", "buy")
+
+# How much an availability constraint is allowed to cost.
+#   free          only things free at point of use on your services
+#   free_or_rent  also things rentable or buyable from providers you declared
+#   any           no availability filter at all
+AVAILABILITY_MODES = ("free", "free_or_rent", "any")
+DEFAULT_AVAILABILITY = "free"
 
 # ---------------------------------------------------------------------------
 # Honesty thresholds. Below these, the profile reports insufficient evidence

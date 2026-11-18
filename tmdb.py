@@ -231,3 +231,19 @@ def free_on(avail, service_names):
             if name and name.lower() in owned:
                 hits.append(name)
     return sorted(set(hits))
+
+
+def paid_on(avail, service_names):
+    """Which of the user's declared rent/buy providers carry this.
+
+    Separate from free_on because the buckets must not cross: a provider
+    declared as somewhere you will rent from should never make a title look
+    free, and a free-tier provider should never satisfy a rental request.
+    """
+    allowed = {s.lower() for s in service_names}
+    hits = []
+    for bucket in ("rent", "buy"):
+        for name in avail.get(bucket) or []:
+            if name and name.lower() in allowed:
+                hits.append(name)
+    return sorted(set(hits))

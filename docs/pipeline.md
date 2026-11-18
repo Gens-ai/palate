@@ -49,7 +49,7 @@ with a missing arrow would have shown that in seconds.
           no tags → score None, looked_up False  ← honesty gate 2
                          │
                  picker.state_check()
-          runtime cap · state-axis caps · require_free
+          runtime cap · state-axis caps · availability mode
           unverifiable → `unchecked`, not "satisfied"  ← honesty gate 3
                          │
           ┌──────────────┴──────────────┐
@@ -127,6 +127,8 @@ removed:
 | Thin evidence | `taste_profile.build` — 20 verdicts, 3 support, bootstrap CI excluding zero | report an affinity the sample cannot support |
 | Unexamined ≠ unmatched | `picker.rank` — `trait_score: None`, `looked_up: False` | claim a comparison that never happened |
 | Unverifiable constraint | `picker.state_check` — `unchecked` list | say something "fits" on a dimension never measured |
+| Cost is named, not implied | `picker.cost_of` — `cost` on every entry | present a paid rental as if it were free |
+| No invented prices | nothing quotes an amount | TMDB gives providers, not prices, so none is guessed |
 | Guessed units | `sources/*` → `assumed_units` | launder a guess into a reading |
 | Foreign file | `sources.base.read_csv_guarded` | echo contents or schema of a non-export |
 
