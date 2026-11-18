@@ -1,0 +1,23 @@
+name: palate
+version: 0.1.0
+description: >-
+  Keeps your own record of what you watched, what you turned down, and the
+  reason in each case, then picks from it. The reasons are the point: a star
+  rating cannot tell you that you bail on slow films when you are tired but
+  seek them out on a free Sunday. Everything is a local SQLite file you can
+  export; no account, no hosted service, nothing leaves the machine except
+  anonymous lookups to TMDB. Film and TV today, with music and food in the
+  same ledger later.
+author: Joe Kneeland
+license: MIT
+homepage: https://github.com/Gens-ai/palate
+requires_hermes: ">=0.22.0"
+provides_tools:
+  - palate_pick
+  - palate_verdict
+  - palate_seen
+  - palate_services
+  - palate_profile
+  - palate_import
+  - palate_export
+provides_hooks: []
