@@ -249,15 +249,66 @@ def test_picker_respects_a_state_axis_cap_from_the_users_own_correction(con):
     assert "load" in shelved[0]["tonight_blockers"][0]
 
 
-def test_picker_is_honest_when_nothing_overlaps(con):
+def test_picker_says_cold_guess_when_it_looked_and_found_no_overlap(con):
     _seed_liked_director(con)
     verdicts = storage.verdicts_with_tags(con)
     stranger = storage.upsert_work(con, medium="film", title="Unrelated",
                                    source="tmdb", source_id="4242", runtime_min=90)
+    storage.set_tags(con, stranger, [("crew", "director:Nobody You Know", 3.0),
+                                     ("keyword", "unrelated thing", 1.0)])
     candidates = [{"work_id": stranger, "title": "Unrelated", "medium": "film",
-                   "runtime_min": 90, "tags": []}]
+                   "runtime_min": 90, "tags": storage.tags_for(con, stranger)}]
     picks, _ = picker.rank(con, candidates, verdicts)
+    assert picks[0]["looked_up"] is True
+    assert picks[0]["trait_score"] == 0.0
     assert "cold guess" in picks[0]["why"]
+
+
+def test_an_unexamined_candidate_is_not_claimed_to_be_unmatched(con):
+    """Regression: 'never looked up' must not be reported as 'no overlap'.
+
+    Found live. When the per-pick detail budget ran out, untagged candidates
+    scored 0.0 and were explained as "nothing in your ledger overlaps", which
+    claims a comparison that never happened - and let an unexamined title
+    outrank a genuinely matched one.
+    """
+    matched_id = _seed_liked_director(con)
+    verdicts = storage.verdicts_with_tags(con)
+
+    good = storage.upsert_work(con, medium="film", title="Poetry", year=2010,
+                               source="tmdb", source_id="88881", runtime_min=90)
+    storage.set_tags(con, good, [("crew", "director:Lee Chang-dong", 3.0)])
+    unknown = storage.upsert_work(con, medium="film", title="Never Fetched",
+                                  source="tmdb", source_id="55555", runtime_min=90)
+
+    candidates = [
+        {"work_id": unknown, "title": "Never Fetched", "medium": "film",
+         "runtime_min": 90, "tags": []},
+        {"work_id": good, "title": "Poetry", "year": 2010, "medium": "film",
+         "runtime_min": 90, "tags": storage.tags_for(con, good)},
+    ]
+    picks, _ = picker.rank(con, candidates, verdicts)
+
+    assert picks[0]["title"] == "Poetry", "an examined match must outrank an unexamined title"
+    unexamined = next(p for p in picks if p["title"] == "Never Fetched")
+    assert unexamined["looked_up"] is False
+    assert unexamined["trait_score"] is None, "no score may be asserted for it"
+    assert "overlap" not in unexamined["why"] and "not looked up" in unexamined["why"]
+    assert matched_id not in [p["work_id"] for p in picks]
+
+
+def test_an_unchecked_constraint_is_reported_rather_than_passed(con):
+    """A film with no known runtime must not silently 'fit' a time cap."""
+    _seed_liked_director(con)
+    verdicts = storage.verdicts_with_tags(con)
+    no_runtime = storage.upsert_work(con, medium="film", title="Runtime Unknown",
+                                     source="tmdb", source_id="66666")
+    storage.set_tags(con, no_runtime, [("crew", "director:Lee Chang-dong", 3.0)])
+    candidates = [{"work_id": no_runtime, "title": "Runtime Unknown", "medium": "film",
+                   "runtime_min": None, "tags": storage.tags_for(con, no_runtime)}]
+    picks, _ = picker.rank(con, candidates, verdicts, state={"max_runtime_min": 90})
+    assert picks[0]["fits_tonight"] is True
+    assert any("runtime unknown" in c for c in picks[0]["unchecked"]), picks[0]["unchecked"]
 
 
 # ---------------------------------------------------------------------------

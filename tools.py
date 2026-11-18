@@ -15,10 +15,15 @@ from .sources import base as source_base
 # Set by register(); lets handlers read plugins.entries.palate.settings.*
 _get_config = None
 
-# How many candidates may trigger a TMDB detail fetch in one pick. Tags are
-# cached in the ledger, so the cost falls away as the ledger fills.
-DETAIL_BUDGET = 18
-CANDIDATE_POOL = 40
+# Every candidate in the pool gets examined on the first pass: a budget smaller
+# than the pool means the best match can be the one nobody looked at, which
+# makes a cold cache the worst experience rather than just a slower one.
+# Tags and availability are cached, so repeat picks cost almost nothing.
+CANDIDATE_POOL = 24
+DETAIL_BUDGET = CANDIDATE_POOL
+# Separate budget for the user's own verdict works, which must be tagged or
+# there is nothing for candidates to be similar TO.
+VERDICT_TAG_BUDGET = 12
 
 
 def _ok(payload):
@@ -92,6 +97,29 @@ def palate_pick(params, **_kwargs):
         con = storage.connect()
         verdicts = storage.verdicts_with_tags(con, medium=medium)
         seen = storage.seen_work_ids(con, medium=medium)
+
+        # Hydrate tags for the user's OWN works first. Without this the net is
+        # empty, every candidate scores 0.0 and every explanation degrades to
+        # "cold guess" while looking like a working recommender: the verdicts
+        # are there, the candidates are tagged, and the one side that actually
+        # needs tags never got them. Cached, so this cost falls away.
+        hydrated = 0
+        for v in verdicts:
+            if v["tags"] or hydrated >= VERDICT_TAG_BUDGET:
+                continue
+            row = con.execute("SELECT source_id FROM works WHERE id=?",
+                              (v["work_id"],)).fetchone()
+            if not (row and row["source_id"]):
+                continue
+            try:
+                _tags, did_fetch = _ensure_tags(con, api_key, v["work_id"], medium,
+                                                row["source_id"])
+                hydrated += 1 if did_fetch else 0
+            except tmdb.TmdbError:
+                continue
+        if hydrated:
+            verdicts = storage.verdicts_with_tags(con, medium=medium)
+
         services = storage.list_services(con)
         service_names = [s["name"] for s in services]
         region = storage.region(con)
