@@ -20,9 +20,10 @@ os.environ["HERMES_HOME"] = TMP
 os.environ["PALATE_TMDB_API_KEY"] = "sentinel-must-not-be-used"
 
 sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import load_plugin  # noqa: E402
 
-import palate  # noqa: E402
+palate = load_plugin()
 
 
 class Ctx:

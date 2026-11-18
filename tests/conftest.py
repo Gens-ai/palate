@@ -4,7 +4,6 @@ Set before the plugin is imported, because plugin_db() resolves the home on
 every call and the first call would otherwise land in the live profile.
 """
 
-import importlib.util
 import os
 import shutil
 import sys
@@ -16,22 +15,12 @@ import pytest
 _TMP_HOME = tempfile.mkdtemp(prefix="palate-test-home-")
 os.environ["HERMES_HOME"] = _TMP_HOME
 
-# plugins.plugin_storage / hermes_constants live in the Hermes install tree.
-sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import load_plugin  # noqa: E402
 
-# Register the plugin as the package name `palate` from its own directory,
-# whatever that directory is called. Putting the parent on sys.path instead
-# would make the tests pass only in a checkout literally named "palate" and
-# fail to collect in a clone named anything else, which is what catalog CI
-# and any contributor would hit.
-_ROOT = Path(__file__).resolve().parents[1]
-if "palate" not in sys.modules:
-    _spec = importlib.util.spec_from_file_location(
-        "palate", _ROOT / "__init__.py", submodule_search_locations=[str(_ROOT)])
-    assert _spec and _spec.loader, f"cannot load the plugin package from {_ROOT}"
-    _pkg = importlib.util.module_from_spec(_spec)
-    sys.modules["palate"] = _pkg
-    _spec.loader.exec_module(_pkg)
+# Registers the plugin as `palate` from its own directory, whatever that
+# directory is called. See _bootstrap.py.
+load_plugin()
 
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001

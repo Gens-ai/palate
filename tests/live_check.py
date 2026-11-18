@@ -29,7 +29,8 @@ from pathlib import Path
 TMP = tempfile.mkdtemp(prefix="palate-live-")
 os.environ["HERMES_HOME"] = TMP
 sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import load_plugin  # noqa: E402
 
 
 def read_key():
@@ -55,7 +56,7 @@ if not KEY:
     sys.exit(0)
 print(f"key loaded from {WHERE}: {len(KEY)} chars")
 
-import palate  # noqa: E402
+palate = load_plugin()  # noqa: E402
 from palate import storage, tmdb  # noqa: E402
 
 
