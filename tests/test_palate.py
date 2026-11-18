@@ -434,6 +434,24 @@ def test_export_contains_the_whole_ledger(con, tmp_path):
     json.dumps(data, default=str)  # must be serialisable
 
 
+def test_the_key_is_never_read_from_the_environment(monkeypatch):
+    """Regression for admission rule 11.
+
+    An os.environ fallback can hand back another profile's key under
+    multiplexing, and an undeclared env read contradicts the empty
+    requires_env this plugin ships. The config route is the only route.
+    """
+    from palate import tools
+
+    monkeypatch.setenv("PALATE_TMDB_API_KEY", "sentinel-must-not-be-used")
+    monkeypatch.setattr(tools, "_get_config", lambda _key, _default=None: None)
+    assert tools._api_key() is None, "the environment must not supply the key"
+
+    monkeypatch.setattr(tools, "_get_config", lambda key, _default=None:
+                        "from-config" if key == "tmdb_api_key" else None)
+    assert tools._api_key() == "from-config"
+
+
 def test_every_reason_declares_a_polarity_and_known_axis():
     for name, spec in C.REASONS.items():
         assert spec["polarity"] in (-1, 0, 1), name

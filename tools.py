@@ -35,9 +35,17 @@ def _err(message, **extra):
 
 
 def _api_key():
+    """Read the TMDB key through Hermes's own config route, and only that route.
+
+    Deliberately no os.environ fallback. Admission rule 11 names bare
+    os.environ as the wrong way to reach a credential, because under profile
+    multiplexing it can hand back another profile's key; and an undeclared env
+    read contradicts the empty requires_env this plugin ships. The config route
+    already works, so the fallback was convenience buying a capability.
+    """
     if _get_config is None:
-        return os.environ.get("PALATE_TMDB_API_KEY")
-    return _get_config("tmdb_api_key") or os.environ.get("PALATE_TMDB_API_KEY")
+        return None
+    return _get_config("tmdb_api_key")
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,8 @@ from pathlib import Path
 
 TMP = tempfile.mkdtemp(prefix="palate-smoke-")
 os.environ["HERMES_HOME"] = TMP
-os.environ.pop("PALATE_TMDB_API_KEY", None)
+# Set deliberately: the plugin must NOT pick this up (admission rule 11).
+os.environ["PALATE_TMDB_API_KEY"] = "sentinel-must-not-be-used"
 
 sys.path.insert(0, os.path.expanduser("~/.hermes/hermes-agent"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))

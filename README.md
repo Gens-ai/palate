@@ -182,10 +182,10 @@ never sends your verdicts, your reasons, your ratings, your services or any
 other part of your ledger anywhere. There is no Palate server, no account, no
 telemetry, and no usage reporting.
 
-**Credentials.** Your TMDB key is read from
-`plugins.entries.palate.settings.tmdb_api_key` through Hermes's own config, or
-from `PALATE_TMDB_API_KEY` as a fallback. Palate does not read `.env` files and
-does not store the key itself.
+**Credentials.** Your TMDB key is read only from
+`plugins.entries.palate.settings.tmdb_api_key`, through Hermes's own config
+route. Palate reads no environment variables, no `.env` files and no vendor
+token files, and it does not store or copy the key itself.
 
 **Files read.** Only the single CSV path you pass to `palate_import`, and only
 after the header proves it is a Letterboxd or Trakt export; a file that fails
