@@ -328,6 +328,7 @@ def verdicts_with_tags(con, medium=None):
         out.append({
             "work_id": r["work_id"], "title": r["title"], "year": r["year"],
             "medium": r["medium"], "polarity": pol, "reasons": reasons,
+            "rating": r["rating"], "verdict_id": r["id"],
             "tags": tags_for(con, r["work_id"]),
         })
     return out

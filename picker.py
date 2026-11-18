@@ -67,8 +67,14 @@ def tag_net(verdicts):
 
 
 def _trait_score(cand_tags, net, who, idf=None):
+    """Returns (score, top contributions, how many tags actually overlapped).
+
+    The overlap count is returned separately because the score alone cannot
+    distinguish a genuine match from the best of a thin pool: two films can
+    both score 2.0, one off a shared director and one off two generic genres.
+    """
     if not cand_tags:
-        return 0.0, []
+        return 0.0, [], 0
     idf = idf or {}
     total, contrib = 0.0, []
     for kind, value, weight in cand_tags:
@@ -81,11 +87,50 @@ def _trait_score(cand_tags, net, who, idf=None):
             if c:
                 total += c
                 contrib.append((key, c, who.get(key, [])[:3]))
+    overlap = len(contrib)
     # Normalise by tag count: a work carrying forty keywords should not beat a
     # sparse one just by having more chances to match.
     total /= max(1.0, len(cand_tags) ** 0.5)
     contrib.sort(key=lambda t: -abs(t[1]))
-    return total, contrib[:4]
+    return total, contrib[:4], overlap
+
+
+# Thresholds for match strength, expressed RELATIVE to the best score in the
+# same answer rather than as absolute numbers. An absolute cutoff would be a
+# number invented from nothing: scores are not calibrated and their magnitude
+# moves with ledger size, rarity weighting and tag density.
+MODERATE_RATIO = 0.60
+STRETCH_RATIO = 0.25
+# Below this many overlapping tags, nothing is called a strong match however
+# well it scores, because one lucky rare tag is not a pattern.
+MIN_OVERLAP_FOR_STRONG = 3
+
+
+def match_strength(score, best, overlap):
+    """How much weight this pick deserves, with the reason, or None if unknown.
+
+    Returns (label, note). The honesty problem this solves: a pick scoring 2.0
+    was being printed in the same shape as one scoring 9.8, so the best of a
+    thin pool read as a recommendation.
+    """
+    if score is None:
+        return None, None
+    if score <= 0:
+        return "against", ("it shares more with what you disliked than what you liked, "
+                           "so it is listed for completeness")
+    ratio = (score / best) if best and best > 0 else 1.0
+    if overlap < MIN_OVERLAP_FOR_STRONG:
+        return "stretch", (
+            f"a stretch: only {overlap} tag{'s' if overlap != 1 else ''} overlap"
+            f"{'' if overlap != 1 else 's'} with your ledger"
+            + (f", and it scores {ratio:.0%} of the top match" if ratio < 0.99 else ""))
+    if ratio >= MODERATE_RATIO:
+        return "strong", f"a strong match on {overlap} overlapping tags"
+    if ratio >= STRETCH_RATIO:
+        return "moderate", (f"a moderate match: {overlap} tags overlap, "
+                            f"scoring {ratio:.0%} of the top match")
+    return "stretch", (f"a stretch: scores {ratio:.0%} of the top match "
+                       f"on {overlap} overlapping tags")
 
 
 def _axis_map(con, work_id):
@@ -229,7 +274,8 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
         # overlaps" claims a comparison that never happened, and it lets an
         # unexamined title outrank a genuinely matched one.
         looked_up = bool(tags)
-        trait, contrib = _trait_score(tags, net, who, idf) if looked_up else (0.0, [])
+        trait, contrib, overlap = (_trait_score(tags, net, who, idf) if looked_up
+                                   else (0.0, [], 0))
         axes = _axis_map(con, cand["work_id"]) if cand.get("work_id") else {}
         ok, fails, caveats = state_check(cand, state, axes)
         scored.append({
@@ -241,6 +287,7 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
             "tmdb_id": cand.get("tmdb_id"),
             "trait_score": round(trait, 3) if looked_up else None,
             "looked_up": looked_up,
+            "overlap_tags": overlap if looked_up else None,
             "from_pivots": cand.get("from_pivots") or [],
             "why": explain(contrib) if looked_up else NOT_LOOKED_UP,
             "free_on": cand.get("free_on") or [],
@@ -255,6 +302,15 @@ def rank(con, candidates, verdicts, state=None, seen_ids=(), limit=5):
         })
     # Examined candidates first, best score first; unexamined ones trail.
     scored.sort(key=lambda d: (not d["looked_up"], -(d["trait_score"] or 0.0)))
+    # Strength is relative, so it can only be assigned once the whole answer is
+    # known. Without it a 2.0 and a 9.8 are printed in the same shape and the
+    # best of a thin pool reads as a recommendation.
+    examined = [s for s in scored if s["looked_up"]]
+    best = max((s["trait_score"] or 0.0 for s in examined), default=0.0)
+    for s in scored:
+        label, note = match_strength(s["trait_score"], best, s["overlap_tags"] or 0)
+        s["match_strength"] = label
+        s["strength_note"] = note
     picks = _diversify([s for s in scored if s["fits_tonight"]], limit)
     shelved = [s for s in scored if not s["fits_tonight"]][:limit]
     return picks, shelved

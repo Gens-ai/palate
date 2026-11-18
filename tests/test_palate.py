@@ -597,6 +597,164 @@ def test_a_candidate_several_favourites_recommend_keeps_all_of_them(con):
     assert picker._diversify(ordered, limit=3)[0]["from_pivots"] == ["Coraline", "Ink"]
 
 
+def test_a_weak_match_is_labelled_relative_to_the_best_one(con):
+    """The failure: 2.0 and 9.8 printed in the same shape.
+
+    Thresholds are relative on purpose. Scores are uncalibrated and their
+    magnitude moves with ledger size and rarity weighting, so an absolute
+    cutoff would be a number invented from nothing.
+    """
+    strong, note = picker.match_strength(9.8, 9.8, overlap=5)
+    assert strong == "strong" and "5 overlapping tags" in note
+
+    weak, note = picker.match_strength(2.0, 9.8, overlap=4)
+    assert weak == "stretch", "20% of the best score is not a recommendation"
+    assert "20%" in note and "4 overlapping tags" in note
+
+    mid, note = picker.match_strength(4.0, 9.8, overlap=4)
+    assert mid == "moderate" and "41%" in note
+
+    # 6.0/9.8 is 61%, just above the 60% boundary, so it is strong. Pinned
+    # deliberately: the boundary is a judgement and should fail loudly if moved.
+    assert picker.match_strength(6.0, 9.8, overlap=4)[0] == "strong"
+    assert picker.match_strength(5.8, 9.8, overlap=4)[0] == "moderate"
+
+
+def test_one_lucky_rare_tag_is_never_a_strong_match(con):
+    """Top of the pool on a single overlap is still a thin suggestion."""
+    label, note = picker.match_strength(9.8, 9.8, overlap=1)
+    assert label == "stretch"
+    assert "only 1 tag overlaps" in note
+
+
+def test_a_net_negative_candidate_says_so(con):
+    label, note = picker.match_strength(-3.0, 9.8, overlap=4)
+    assert label == "against"
+    assert "disliked" in note
+
+
+def test_match_strength_is_unknown_for_an_unexamined_candidate(con):
+    assert picker.match_strength(None, 9.8, overlap=0) == (None, None)
+
+
+def test_rank_attaches_strength_relative_to_the_whole_answer(con):
+    # A liked work carrying several tags, so a candidate can genuinely overlap
+    # on more than one. The shared _seed_liked_director fixture tags only two,
+    # which would correctly cap everything at "stretch" and prove nothing.
+    liked = storage.upsert_work(con, medium="film", title="Burning", year=2018,
+                                source="tmdb", source_id="99991")
+    storage.set_tags(con, liked, [("crew", "director:Lee Chang-dong", 3.0),
+                                  ("keyword", "candid", 1.0),
+                                  ("keyword", "rural", 1.0),
+                                  ("genre", "Drama", 1.0)])
+    storage.add_verdict(con, work_id=liked, verdict="seen", reasons=["loved_it"], rating=9)
+    verdicts = storage.verdicts_with_tags(con)
+    cands = []
+    for name, tags in (("Strong", [("crew", "director:Lee Chang-dong", 3.0),
+                                   ("keyword", "candid", 1.0),
+                                   ("keyword", "rural", 1.0),
+                                   ("genre", "Drama", 1.0)]),
+                       ("Thin", [("genre", "Drama", 1.0)])):
+        wid = storage.upsert_work(con, medium="film", title=name, source="tmdb",
+                                  source_id=name, runtime_min=100)
+        storage.set_tags(con, wid, tags)
+        cands.append({"work_id": wid, "title": name, "medium": "film",
+                      "runtime_min": 100, "tags": storage.tags_for(con, wid),
+                      "free_on": ["Hulu"]})
+    picks, _ = picker.rank(con, cands, verdicts,
+                           state={"availability": "any", "has_services": True}, limit=5)
+    by_title = {p["title"]: p for p in picks}
+    assert by_title["Strong"]["match_strength"] == "strong"
+    assert by_title["Thin"]["match_strength"] == "stretch"
+    assert by_title["Thin"]["overlap_tags"] < by_title["Strong"]["overlap_tags"]
+    assert by_title["Thin"]["strength_note"]
+
+
+def test_discover_refuses_a_half_availability_request(con, monkeypatch):
+    """Providers without a region are silently ignored by TMDB.
+
+    Sending that half request would filter on nothing while the output claimed
+    availability had been applied.
+    """
+    seen = {}
+
+    def fake_get(api_key, path, **params):
+        seen.update(params)
+        return {"results": []}
+
+    monkeypatch.setattr(tmdb, "_get", fake_get)
+
+    tmdb.discover("k", "film", with_providers=[15, 386])
+    assert seen["with_watch_providers"] is None, "no region, so no provider filter"
+    assert seen["watch_region"] is None
+
+    tmdb.discover("k", "film", with_providers=[15, 386], watch_region="US",
+                  monetization="flatrate|free|ads")
+    assert seen["with_watch_providers"] == "15|386"
+    assert seen["watch_region"] == "US"
+    assert seen["with_watch_monetization_types"] == "flatrate|free|ads"
+
+
+def test_provider_ids_matches_exactly_and_reports_what_it_could_not_match(con, monkeypatch):
+    """A fuzzy match would filter on the wrong service and still look fine."""
+    monkeypatch.setattr(tmdb, "_get", lambda api_key, path, **p: {"results": [
+        {"provider_name": "Tubi TV", "provider_id": 73},
+        {"provider_name": "HBO Max", "provider_id": 1899},
+        {"provider_name": "Hulu", "provider_id": 15},
+    ]})
+    found, unmatched = tmdb.provider_ids("k", "film", ["hulu", "TUBI TV", "Nonesuch"])
+    assert found == {"Hulu": 15, "Tubi TV": 73}, "case-insensitive but exact"
+    assert unmatched == ["nonesuch"]
+    assert tmdb.provider_ids("k", "film", []) == ({}, [])
+
+
+def test_the_strongest_pivot_is_never_evicted_by_a_newer_one(con):
+    """The bug: pivots[-N:] kept the most RECENT favourites.
+
+    Logging a seventh liked film dropped the oldest pivot, which happened to
+    carry the single best match in the ledger. The answer still looked well
+    scored, just quietly without its best item.
+    """
+    from palate import tools
+
+    liked = []
+    for i, (title, reasons, rating) in enumerate([
+            ("Oldest Loved", ["loved_it"], None),
+            ("Mid Rated", [], 8),
+            ("Newest Loved", ["loved_it"], None),
+            ("Newest Mild", [], 7)]):
+        liked.append({"title": title, "reasons": reasons, "rating": rating,
+                      "verdict_id": i + 1, "polarity": 1})
+
+    def rank(v):
+        loved = 1 if "loved_it" in (v.get("reasons") or []) else 0
+        return (-loved, -(v.get("rating") or 0), -(v.get("verdict_id") or 0))
+
+    ordered = [v["title"] for v in sorted(liked, key=rank)]
+    assert ordered[:2] == ["Newest Loved", "Oldest Loved"], ordered
+    assert "Oldest Loved" in ordered[:2], \
+        "an explicit loved_it must outrank a newer mild verdict"
+    # And the old behaviour, for contrast: recency alone drops it.
+    by_recency = [v["title"] for v in sorted(liked, key=lambda v: -v["verdict_id"])]
+    assert by_recency[-1] == "Oldest Loved"
+    assert tools.PIVOT_LIMIT >= 8, "the limit must cover a normal favourites list"
+
+
+def test_the_pool_grows_with_the_number_of_generators(con):
+    """A fixed pool divided by many groups starves each one."""
+    from palate import tools
+
+    for groups, expected_min in ((2, tools.CANDIDATE_POOL),
+                                 (8, 8 * tools.PER_GROUP_MIN),
+                                 (40, tools.MAX_POOL)):
+        size = min(tools.MAX_POOL,
+                   max(tools.CANDIDATE_POOL, tools.PER_GROUP_MIN * groups))
+        assert size >= min(expected_min, tools.MAX_POOL)
+        assert size <= tools.MAX_POOL, "but it stays bounded"
+    assert tools.PER_GROUP_MIN * 8 > tools.CANDIDATE_POOL, \
+        "with 8 groups the base pool would give each fewer than PER_GROUP_MIN"
+
+
 def test_a_tagging_rules_change_invalidates_the_cache_but_keeps_the_ledger(con):
     """Tags are cached per work, so a rules change must clear them.
 

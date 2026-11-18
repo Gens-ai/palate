@@ -24,6 +24,44 @@ wrong for tonight, and collapsing those two into one number is why "because
 you watched X" suggestions feel like they were written by someone who has
 never met you.
 
+## It tells you when a match is thin
+
+A suggestion is only worth as much as the evidence under it, so every pick
+carries its strength and the reason:
+
+```
+The Adventures of the Wilderness Family · 105 min · free on Tubi
+  a strong match on 9 overlapping tags
+  shares director, composer and writer with Across the Great Divide
+
+Monster High: Haunted · 75 min · free on Plex
+  a stretch: scores 23% of the top match on 6 overlapping tags
+```
+
+The second one is not a recommendation, it is the best of a thin pool, and
+printing both in the same shape would be a quiet lie. Strength is measured
+against the best match in the same answer rather than an absolute cutoff,
+because the scores are not calibrated and their size moves with how much you
+have logged.
+
+## Where suggestions come from
+
+Similarity to what you already liked cannot surface a famous film that sits
+next to nothing in your ledger, however available it is. So there are three
+generators, blended by default:
+
+| `strategy` | Finds |
+|---|---|
+| `taste` | neighbours of the works you liked — the strongest matches |
+| `canon` | widely seen, well regarded, and you have no verdict on it |
+| `available` | filtered by your own services *before* ranking, not after |
+| `mixed` | all three (default) |
+
+Each liked work gets an equal share of the pool, and no more than two picks
+may trace back to the same favourite, so one film you loved cannot quietly
+decide the whole answer. Favourites that did not fit the limit are **named**
+in the result rather than silently dropped.
+
 ## Install
 
 [Install in Hermes](hermes://plugin/install?repo=Gens-ai/palate&enable=1)

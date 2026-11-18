@@ -32,7 +32,12 @@ PALATE_PICK = {
         "a 'why' naming the works it leaned on; show that to the user, it is the point. "
         "Every entry also carries 'cost': say it out loud when it is 'rent', so a paid "
         "option is never presented as if it were free. Prices are not available, so name "
-        "the provider and never guess an amount."
+        "the provider and never guess an amount.\n\n"
+        "'match_strength' is strong, moderate, stretch or against, with 'strength_note' "
+        "giving the reason. Do NOT present a stretch in the same breath as a strong "
+        "match: say it is a thin match and why. The best item in a sparse pool is still "
+        "a weak suggestion, and claiming otherwise is the failure this field exists to "
+        "prevent."
     ),
     "input_schema": {
         "type": "object",
@@ -41,6 +46,19 @@ PALATE_PICK = {
                        "description": "film and tv are supported today."},
             "seed_title": {"type": "string",
                            "description": "Pivot off one work, e.g. 'something like Burning'. Optional."},
+            "strategy": {
+                "type": "string", "enum": ["mixed", "taste", "canon", "available"],
+                "default": "mixed",
+                "description": (
+                    "Where candidates come from. 'mixed' (default) blends all three. "
+                    "'taste' = neighbours of works they liked; strongest matches, but it "
+                    "structurally cannot surface a famous film that is not adjacent to "
+                    "anything in their ledger. 'canon' = widely-seen, well-regarded titles "
+                    "they have no verdict on; use it when they ask about classics or "
+                    "'things everyone has seen'. 'available' = titles filtered by their "
+                    "services before ranking, for when almost everything keeps getting "
+                    "shelved as unavailable. Ignored when seed_title is given."),
+            },
             "availability": {
                 "type": "string", "enum": list(C.AVAILABILITY_MODES),
                 "default": C.DEFAULT_AVAILABILITY,

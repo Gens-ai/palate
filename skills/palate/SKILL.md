@@ -53,6 +53,28 @@ of titles is what every other recommender already does badly.
 constraint about tonight. Offer them as exactly that, with the blocker named.
 Do not silently drop them, and do not pretend the constraint was about taste.
 
+### How strong is the match
+
+Every pick carries `match_strength` (`strong`, `moderate`, `stretch`,
+`against`) and a `strength_note`. **Say it when it is a stretch.** The best
+item in a thin pool is still a weak suggestion, and presenting it in the same
+breath as a strong match is the exact dishonesty this field exists to stop.
+
+If `pivots.not_consulted` is non-empty, some of their favourites were not
+searched this time. Mention it rather than implying the whole ledger was used.
+
+### Where to look
+
+`strategy` decides which generators run:
+
+- **`mixed`** (default) — all three.
+- **`taste`** — neighbours of what they liked. Strongest matches, but it
+  cannot reach a famous film that sits next to nothing in their ledger.
+- **`canon`** — widely seen and well regarded, with no verdict yet. Use this
+  when they ask about classics, "films everyone has seen", or filling gaps.
+- **`available`** — filtered by their services before ranking. Use it when
+  picks keep getting shelved as unavailable.
+
 ### Money
 
 `availability` controls what a pick may cost:

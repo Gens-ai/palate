@@ -1,5 +1,5 @@
 name: palate
-version: 0.3.0
+version: 0.4.0
 description: >-
   Keeps your own record of what you watched, what you turned down, and the
   reason in each case, then picks from it. The reasons are the point: a star

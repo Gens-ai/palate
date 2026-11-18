@@ -23,8 +23,13 @@ with a missing arrow would have shown that in seconds.
             └─────────────────────────┬──────────────────────┘
                                       │
                            picker.rank()
-   candidate generation, round-robin across up to PIVOT_LIMIT liked works
-   (concatenating pages instead gives pivot 1 the whole pool and the rest none)
+   candidate generation, one group per generator, merged round-robin:
+     taste      recommendations for each liked work (PIVOT_LIMIT, ranked by
+                evidence strength, NOT recency — a [-N:] slice evicts the
+                oldest favourite and takes its best match with it)
+     canon      discover(), widely seen + well regarded, no verdict yet
+     available  discover() filtered by your providers server-side
+   pool_size grows with the group count, or fairness starves every group
                          │
                  picker.tag_net()
                  {tag: Σ polarity × weight}, + who contributed
@@ -134,6 +139,8 @@ removed:
 | Cost is named, not implied | `picker.cost_of` — `cost` on every entry | present a paid rental as if it were free |
 | No invented prices | nothing quotes an amount | TMDB gives providers, not prices, so none is guessed |
 | One favourite cannot own the answer | `tools._interleave` + `picker._diversify` (`PICKS_PER_PIVOT`) | present six neighbours of a single liked work as if the whole ledger were consulted |
+| Weak matches say they are weak | `picker.match_strength` — `match_strength` + `strength_note` | print a 2.0 and a 9.8 in the same shape, so the best of a thin pool reads as a recommendation |
+| Unconsulted favourites are named | `pivots.not_consulted` in the result | search a subset of the ledger while implying all of it |
 | Guessed units | `sources/*` → `assumed_units` | launder a guess into a reading |
 | Foreign file | `sources.base.read_csv_guarded` | echo contents or schema of a non-export |
 

@@ -21,7 +21,7 @@ from pathlib import Path
 from . import schemas as _schemas
 from . import tools as _tools
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 def register(ctx):

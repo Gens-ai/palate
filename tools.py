@@ -20,14 +20,31 @@ _get_config = None
 # makes a cold cache the worst experience rather than just a slower one.
 # Tags and availability are cached, so repeat picks cost almost nothing.
 CANDIDATE_POOL = 24
+# Kept equal to the pool: the detail budget must cover every candidate or the
+# best match can be the one nobody examined. Both now scale together via
+# pool_size, computed per call from the number of generators in play.
 DETAIL_BUDGET = CANDIDATE_POOL
+# Each generator needs a real share, or round-robin fairness starts discarding
+# the best match: with a fixed pool of 24 and 8 groups every group gets 3
+# slots, and a 9.7-scoring match sitting at position 4 of its pivot's page is
+# dropped in favour of spread. So the pool grows with the number of groups,
+# bounded so a pick cannot become unboundedly slow on a cold cache.
+PER_GROUP_MIN = 4
+MAX_POOL = 48
 # Separate budget for the user's own verdict works, which must be tagged or
 # there is nothing for candidates to be similar TO.
 VERDICT_TAG_BUDGET = 12
 # How many liked works may seed the pool. One TMDB recommendations call per
 # pivot, and the pool is split evenly between them, so this is both a cost
 # ceiling and the width of the search.
-PIVOT_LIMIT = 6
+PIVOT_LIMIT = 8
+# Canon generation: widely-seen, well-regarded titles, used to reach films that
+# no neighbour-of-what-you-liked search can ever surface.
+CANON_MIN_VOTES = 3000
+CANON_MIN_RATING = 7.5
+# A share of the pool reserved for availability-first candidates, so access is
+# a filter of first resort rather than only a filter of last resort.
+AVAIL_FIRST_SHARE = 0.34
 
 
 def _interleave(groups):
@@ -178,6 +195,11 @@ def palate_pick(params, **_kwargs):
             storage.add_state_note(con, note)
 
         # ---- candidate generation -------------------------------------------------
+        # Initialised before the branch: the seeded path does not set it, and
+        # the result block below reads it unconditionally.
+        unmatched_services = []
+        pool_size = CANDIDATE_POOL
+        pivots_used, pivots_skipped = [], []
         candidates, how = [], ""
         seed = params.get("seed_title")
         if seed:
@@ -187,28 +209,94 @@ def palate_pick(params, **_kwargs):
             candidates = tmdb.recommendations(api_key, medium, hits[0]["tmdb_id"])
             how = f"similar to {hits[0]['title']}"
         else:
-            liked = [v for v in verdicts if v["polarity"] > 0]
-            pivots = []
-            for v in liked:
-                row = con.execute("SELECT source, source_id FROM works WHERE id=?",
-                                  (v["work_id"],)).fetchone()
-                if row and row["source"] == "tmdb" and row["source_id"]:
-                    pivots.append((row["source_id"], v["title"]))
-            pivots = pivots[-PIVOT_LIMIT:]
-            groups = []
-            for tmdb_id, title in pivots:
+            strategy = params.get("strategy") or "mixed"
+            groups, notes = [], []
+
+            if strategy in ("taste", "mixed"):
+                liked = [v for v in verdicts if v["polarity"] > 0]
+                # Order pivots by how strong the evidence is, NOT by recency.
+                # A plain [-N:] slice silently evicts the oldest favourites, so
+                # logging a seventh film dropped the pivot carrying the single
+                # best match in the ledger and the loss was invisible: the
+                # answer still looked well scored, just without its best item.
+                # loved_it outranks a bare rating, and ties break on recency.
+                def _pivot_rank(v):
+                    loved = 1 if "loved_it" in (v.get("reasons") or []) else 0
+                    return (-loved, -(v.get("rating") or 0), -(v.get("verdict_id") or 0))
+
+                liked.sort(key=_pivot_rank)
+                pivots, skipped = [], []
+                for v in liked:
+                    row = con.execute("SELECT source, source_id FROM works WHERE id=?",
+                                      (v["work_id"],)).fetchone()
+                    if not (row and row["source"] == "tmdb" and row["source_id"]):
+                        continue
+                    if len(pivots) < PIVOT_LIMIT:
+                        pivots.append((row["source_id"], v["title"]))
+                    else:
+                        skipped.append(v["title"])
+                pivots_used = [t for _, t in pivots]
+                pivots_skipped = skipped
+                for tmdb_id, title in pivots:
+                    try:
+                        recs = tmdb.recommendations(api_key, medium, tmdb_id)
+                    except tmdb.TmdbError:
+                        continue
+                    for r in recs:
+                        r["from_pivot"] = title
+                    if recs:
+                        groups.append(recs)
+                if groups:
+                    notes.append(f"round-robin across {len(groups)} works you rated well")
+
+            if strategy in ("canon", "mixed"):
+                # Reaches what similarity structurally cannot: a widely-seen
+                # classic is not a neighbour of anything in a small ledger, so
+                # without this generator it can never appear at all, however
+                # available it is.
                 try:
-                    recs = tmdb.recommendations(api_key, medium, tmdb_id)
+                    canon = tmdb.discover(
+                        api_key, medium, min_votes=CANON_MIN_VOTES,
+                        min_rating=CANON_MIN_RATING, sort_by="vote_count.desc",
+                        max_runtime=state["max_runtime_min"])
+                    for r in canon:
+                        r["from_pivot"] = "widely seen"
+                    if canon:
+                        groups.append(canon)
+                        notes.append("plus widely-seen titles you have no verdict on")
                 except tmdb.TmdbError:
-                    continue
-                for r in recs:
-                    r["from_pivot"] = title
-                if recs:
-                    groups.append(recs)
+                    pass
+
+            if strategy in ("available", "mixed") and free_names:
+                # Availability as a filter of FIRST resort. The similarity
+                # generator produces candidates and access is only checked
+                # afterwards, so with few services most of the pool is
+                # discarded; asking TMDB to filter server-side spends the pool
+                # on things that can actually be watched.
+                try:
+                    ids, unmatched = tmdb.provider_ids(api_key, medium, free_names,
+                                                       watch_region=region)
+                    if ids:
+                        avail = tmdb.discover(
+                            api_key, medium, with_providers=list(ids.values()),
+                            watch_region=region, monetization="flatrate|free|ads",
+                            min_votes=200, sort_by="vote_count.desc",
+                            max_runtime=state["max_runtime_min"])
+                        for r in avail:
+                            r["from_pivot"] = "free on your services"
+                        if avail:
+                            groups.append(avail)
+                            notes.append(f"plus titles free on {len(ids)} of your services")
+                    if unmatched:
+                        unmatched_services = unmatched
+                except tmdb.TmdbError:
+                    pass
+
             candidates = _interleave(groups)
             if candidates:
-                how = (f"round-robin across {len(groups)} works you rated well, "
-                       f"so each contributes to the pool")
+                how = ", ".join(notes) + ", each contributing to the pool"
+                pool_size = min(MAX_POOL, max(CANDIDATE_POOL,
+                                              PER_GROUP_MIN * len(groups)))
             else:
                 candidates = tmdb.discover(
                     api_key, medium, max_runtime=state["max_runtime_min"])
@@ -229,7 +317,7 @@ def palate_pick(params, **_kwargs):
             c["from_pivots"] = [pivot] if pivot else []
             by_id[c["tmdb_id"]] = c
             uniq.append(c)
-        candidates = uniq[:CANDIDATE_POOL]
+        candidates = uniq[:pool_size]
 
         # ---- hydrate ------------------------------------------------------------
         fetched, enriched = 0, []
@@ -239,7 +327,7 @@ def palate_pick(params, **_kwargs):
             if wid in seen:
                 continue
             tags, did_fetch = _ensure_tags(con, api_key, wid, medium, c["tmdb_id"],
-                                           allow_fetch=fetched < DETAIL_BUDGET)
+                                           allow_fetch=fetched < pool_size)
             fetched += 1 if did_fetch else 0
             row = con.execute("SELECT runtime_min FROM works WHERE id=?", (wid,)).fetchone()
 
@@ -266,6 +354,11 @@ def palate_pick(params, **_kwargs):
         return _ok({
             "ok": True,
             "candidate_strategy": how,
+            "pivots": {
+                "used": pivots_used or None,
+                "not_consulted": pivots_skipped or None,
+                "limit": PIVOT_LIMIT,
+            } if (pivots_used or pivots_skipped) else None,
             "picks": picks,
             "shelved_for_another_night": shelved,
             "ledger": storage.counts(con),
@@ -283,6 +376,7 @@ def palate_pick(params, **_kwargs):
                 "mode": mode,
                 "free_services": free_names or None,
                 "rental_services_you_accept": paid_names or None,
+                "unrecognised_services": unmatched_services or None,
                 "note": ("Prices are not available: TMDB reports which providers rent a "
                          "title but not what they charge, so a rental is named, never priced."
                          if mode != "free" else

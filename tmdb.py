@@ -145,21 +145,59 @@ def recommendations(api_key, medium, tmdb_id, page=1):
 
 def discover(api_key, medium, *, max_runtime=None, min_year=None, max_year=None,
              with_keywords=None, with_people=None, page=1, sort_by="vote_count.desc",
-             min_votes=50):
+             min_votes=50, with_providers=None, watch_region=None,
+             monetization=None, min_rating=None):
     kind = MEDIUM_TO_PATH[medium]
     params = {
         "sort_by": sort_by,
         "page": page,
         "vote_count.gte": min_votes,
+        "vote_average.gte": min_rating,
         "with_runtime.lte": max_runtime,
         "with_keywords": "|".join(str(k) for k in with_keywords) if with_keywords else None,
         "with_people": "|".join(str(p) for p in with_people) if with_people else None,
+        # Availability filtering happens server-side when asked for. TMDB
+        # requires watch_region alongside the provider list, and silently
+        # ignores the providers without it, so refuse to send a half request.
+        "with_watch_providers": ("|".join(str(p) for p in with_providers)
+                                 if (with_providers and watch_region) else None),
+        "watch_region": watch_region if with_providers else None,
+        "with_watch_monetization_types": (monetization
+                                          if (with_providers and watch_region) else None),
     }
     if kind == "movie":
         params["primary_release_date.gte"] = f"{min_year}-01-01" if min_year else None
         params["primary_release_date.lte"] = f"{max_year}-12-31" if max_year else None
     data = _get(api_key, f"/discover/{kind}", **params)
     return [_slim(kind, r) for r in (data.get("results") or [])]
+
+
+def provider_ids(api_key, medium, names, watch_region="US"):
+    """Map provider names the user declared onto TMDB's numeric provider ids.
+
+    discover() takes ids, while the user's service list is names, and the names
+    are what availability already reports. Matching is exact and
+    case-insensitive: a fuzzy match here would quietly filter on the wrong
+    service and the answer would look fine.
+    """
+    kind = MEDIUM_TO_PATH[medium]
+    wanted = {n.strip().lower() for n in names if n}
+    if not wanted:
+        return {}, []
+    data = _get(api_key, f"/watch/providers/{kind}", watch_region=watch_region)
+    found, unmatched = {}, []
+    by_name = {}
+    for row in data.get("results") or []:
+        name = (row.get("provider_name") or "").strip()
+        if name:
+            by_name[name.lower()] = (name, row.get("provider_id"))
+    for want in sorted(wanted):
+        hit = by_name.get(want)
+        if hit and hit[1] is not None:
+            found[hit[0]] = hit[1]
+        else:
+            unmatched.append(want)
+    return found, unmatched
 
 
 def tags_from_details(det):
