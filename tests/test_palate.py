@@ -755,6 +755,134 @@ def test_the_pool_grows_with_the_number_of_generators(con):
         "with 8 groups the base pool would give each fewer than PER_GROUP_MIN"
 
 
+def test_export_refuses_the_paths_a_prompt_injection_would_aim_at(con, tmp_path, monkeypatch):
+    """palate_export took an arbitrary path from a model-supplied argument.
+
+    An injected call could overwrite a shell rc, ~/.ssh/authorized_keys or
+    Hermes' own config with export JSON, bypassing the denylist Hermes' file
+    tools enforce. Each gate is asserted separately so a regression names
+    which one broke.
+    """
+    from palate import tools
+
+    # Gate 1: Hermes' own denylist, stubbed so the test does not depend on
+    # which paths this machine happens to protect.
+    class FakeFS:
+        @staticmethod
+        def is_write_denied(path):
+            return "authorized_keys" in path or path.endswith("config.yaml")
+
+        @staticmethod
+        def get_write_denied_error(path, **_kw):
+            return f"Write denied: '{path}' is a protected system/credential file."
+
+    monkeypatch.setattr(tools, "_file_safety", lambda: FakeFS)
+    for target in (os.path.expanduser("~/.ssh/authorized_keys"),
+                   str(tmp_path / "config.yaml")):
+        err, checks = tools._export_write_guard(target)
+        assert err and "denied" in err.lower(), target
+        assert checks["denylist"] == "checked"
+
+    # Gate 2: suffix. A .json requirement keeps the tool from being aimed at
+    # a script or rc file even where the denylist has no opinion.
+    for target in (os.path.expanduser("~/.bashrc"),
+                   str(tmp_path / "run.sh"),
+                   str(tmp_path / "notes")):
+        err, checks = tools._export_write_guard(target)
+        assert err and ".json" in err, target
+        assert checks["suffix"] == "rejected"
+
+    # Gate 3: no clobbering a file that is not already our own export.
+    victim = tmp_path / "important.json"
+    victim.write_text(json.dumps({"some": "other tool's data"}), encoding="utf-8")
+    err, checks = tools._export_write_guard(str(victim))
+    assert err and "already exists" in err
+    assert checks["clobber"] == "rejected"
+
+    # An earlier palate export MAY be overwritten; that is the normal case.
+    victim.write_text(json.dumps({"format": "palate-export", "version": 1}), encoding="utf-8")
+    err, checks = tools._export_write_guard(str(victim))
+    assert err is None
+    assert "earlier palate export" in checks["clobber"]
+
+    # A fresh .json path is fine.
+    assert tools._export_write_guard(str(tmp_path / "new.json"))[0] is None
+
+
+def test_export_refuses_to_write_inside_the_hermes_home(con, tmp_home, tmp_path):
+    """The denylist protects known files, so a NEW file there would pass it.
+
+    An export has no business inside Hermes' own directory: the plugin's
+    storage lives there and is managed by storage.py, not by this tool.
+    """
+    from palate import tools
+
+    for target in ("credentials.json", "config.json", "plugin-data/anything.json"):
+        err, checks = tools._export_write_guard(os.path.join(tmp_home, target))
+        assert err and "Hermes home" in err, target
+        assert checks["hermes_home"] == "rejected"
+
+    # Outside it, the same filename is allowed.
+    assert tools._export_write_guard(str(tmp_path / "credentials.json"))[0] is None
+
+
+def test_a_denylist_that_cannot_be_consulted_fails_closed(con, tmp_path, monkeypatch):
+    """Losing the check must make the guard stricter, never weaker."""
+    from palate import tools
+
+    class Exploding:
+        @staticmethod
+        def is_write_denied(path):
+            raise RuntimeError("denylist unavailable")
+
+    monkeypatch.setattr(tools, "_file_safety", lambda: Exploding)
+    err, checks = tools._export_write_guard(str(tmp_path / "fine.json"))
+    assert err and "could not verify" in err
+    assert checks["denylist"] == "errored, treated as deny"
+
+    # With the module absent entirely, the remaining gates still apply.
+    monkeypatch.setattr(tools, "_file_safety", lambda: None)
+    assert tools._export_write_guard(os.path.expanduser("~/.bashrc"))[0]
+    err, checks = tools._export_write_guard(str(tmp_path / "fine.json"))
+    assert err is None and checks["denylist"] == "not available", \
+        "and the result says the denylist did not run, rather than implying it passed"
+
+
+def test_export_through_the_tool_refuses_and_writes_nothing(con, tmp_path):
+    from palate import tools
+
+    victim = tmp_path / "keep.txt"
+    victim.write_text("original contents", encoding="utf-8")
+    out = json.loads(tools.palate_export({"path": str(victim)}))
+    assert out["ok"] is False and out.get("refused") is True
+    assert victim.read_text(encoding="utf-8") == "original contents", \
+        "the victim file must be untouched"
+
+    good = tmp_path / "export.json"
+    out = json.loads(tools.palate_export({"path": str(good)}))
+    assert out["ok"] is True and good.is_file()
+    assert out["write_checks"]["suffix"] == "ok"
+
+
+def test_import_consults_the_read_denylist(con, tmp_path, monkeypatch):
+    """An injected import could otherwise be aimed at a secret-bearing file."""
+    secret = tmp_path / ".env"
+    secret.write_text("API_KEY=should-never-be-read\n", encoding="utf-8")
+
+    import agent.file_safety as real_fs
+
+    def deny(path):
+        if str(path).endswith(".env"):
+            raise ValueError(f"Access denied: {path} is a secret-bearing environment file.")
+
+    monkeypatch.setattr(real_fs, "raise_if_read_blocked", deny)
+    with pytest.raises(source_base.FormatRefused) as caught:
+        source_base.read_csv_guarded(str(secret), require_all=("name",), label="Letterboxd")
+    assert "Access denied" in str(caught.value)
+    assert "should-never-be-read" not in str(caught.value), \
+        "a refusal must carry no content from the file"
+
+
 def test_a_tagging_rules_change_invalidates_the_cache_but_keeps_the_ledger(con):
     """Tags are cached per work, so a rules change must clear them.
 

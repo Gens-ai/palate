@@ -545,17 +545,123 @@ def palate_import(params, **_kwargs):
         return _err(f"{exc.__class__.__name__}: {exc}")
 
 
+EXPORT_FORMAT = "palate-export"
+
+
+def _file_safety():
+    """Hermes' own write/read denylist, if reachable.
+
+    Imported lazily and defensively, but a failure here must make the guard
+    STRICTER rather than quietly removing a check, so the caller is told
+    whether the denylist actually ran.
+    """
+    try:
+        from agent import file_safety  # noqa: PLC0415
+        return file_safety
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _hermes_home():
+    """Realpath of the Hermes home, or None if it cannot be resolved.
+
+    Uses Hermes' own resolver rather than the raw env var: one gateway can
+    serve several profiles and keeps only the launch profile in HERMES_HOME.
+    """
+    try:
+        import hermes_constants  # noqa: PLC0415
+        return os.path.realpath(str(hermes_constants.get_hermes_home()))
+    except Exception:  # noqa: BLE001
+        raw = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        try:
+            return os.path.realpath(raw)
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _looks_like_palate_export(path):
+    """True only if the file on disk is already one of our own exports."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            head = json.load(fh)
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(head, dict) and head.get("format") == EXPORT_FORMAT
+
+
+def _export_write_guard(path):
+    """Return (error, checks) for writing an export to `path`.
+
+    palate_export wrote to whatever path it was handed. A prompt-injected call
+    could therefore overwrite any user-writable file - a shell rc file,
+    ~/.ssh/authorized_keys, Hermes' own config.yaml - with export JSON, and it
+    would bypass the denylist Hermes' own file tools enforce. The path is a
+    model-supplied argument, so it is untrusted input.
+
+    Three gates: Hermes' denylist, a .json suffix, and no clobbering anything
+    that is not already a palate export.
+    """
+    checks = {"denylist": "not available", "hermes_home": "ok",
+              "suffix": "ok", "clobber": "ok"}
+    fs = _file_safety()
+    if fs is not None:
+        checks["denylist"] = "checked"
+        try:
+            if fs.is_write_denied(path):
+                return (fs.get_write_denied_error(path)
+                        or f"Write denied: '{path}' is a protected system or credential "
+                           f"file."), checks
+        except Exception:  # noqa: BLE001
+            # A denylist that errors is not a denylist that passed.
+            checks["denylist"] = "errored, treated as deny"
+            return (f"Write refused: could not verify that '{path}' is safe to write."), checks
+
+    # The denylist protects specific known files, so a NEW file inside the
+    # Hermes home (~/.hermes/credentials.json, say) passes it. An export has
+    # no business being written there at all: the plugin's own storage lives
+    # in the Hermes home and is managed by storage.py, never by this tool.
+    home = _hermes_home()
+    if home:
+        try:
+            if os.path.commonpath([os.path.realpath(path), home]) == home:
+                checks["hermes_home"] = "rejected"
+                return (f"Write refused: '{path}' is inside the Hermes home. Exports go "
+                        f"somewhere you chose, not into Hermes' own directory."), checks
+        except ValueError:
+            pass  # different drives on Windows; nothing to compare
+
+    if not path.lower().endswith(".json"):
+        checks["suffix"] = "rejected"
+        return (f"Write refused: '{path}' does not end in .json. An export is JSON, and "
+                f"refusing other suffixes keeps this tool from being aimed at a config "
+                f"or script file."), checks
+
+    if os.path.exists(path):
+        if os.path.isdir(path):
+            checks["clobber"] = "rejected"
+            return f"Write refused: '{path}' is a directory.", checks
+        if not _looks_like_palate_export(path):
+            checks["clobber"] = "rejected"
+            return (f"Write refused: '{path}' already exists and is not a palate export. "
+                    f"Pick a new filename, or delete that file yourself first."), checks
+        checks["clobber"] = "overwriting an earlier palate export"
+    return None, checks
+
+
 def palate_export(params, **_kwargs):
     try:
         path = params.get("path") or os.path.expanduser(
             f"~/palate-export-{time.strftime('%Y%m%d')}.json")
         path = os.path.expanduser(path)
+        error, checks = _export_write_guard(path)
+        if error:
+            return _err(error, refused=True, write_checks=checks)
         con = storage.connect()
         data = storage.export_all(con)
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, default=str)
-        return _ok({"ok": True, "path": path,
+        return _ok({"ok": True, "path": path, "write_checks": checks,
                     "counts": {k: len(v) for k, v in data.items() if isinstance(v, list)}})
     except Exception as exc:  # noqa: BLE001
         return _err(f"{exc.__class__.__name__}: {exc}")

@@ -130,12 +130,33 @@ def main():
     print("pick without a key:", out["error"][:90])
 
     # --- export -----------------------------------------------------------
-    dest = Path(TMP) / "export.json"
-    out = call(ctx, "palate_export", path=str(dest))
-    assert out["ok"] and dest.is_file(), out
-    data = json.loads(dest.read_text())
-    print("export:", {k: v for k, v in out["counts"].items() if v})
-    assert data["format"] == "palate-export" and data["verdicts"]
+    # Deliberately NOT under TMP: TMP is the throwaway HERMES_HOME, and
+    # palate_export refuses to write inside the Hermes home. Exporting there
+    # is exactly the mistake the guard exists to catch.
+    out_dir = tempfile.mkdtemp(prefix="palate-smoke-out-")
+    try:
+        dest = Path(out_dir) / "export.json"
+        out = call(ctx, "palate_export", path=str(dest))
+        assert out["ok"] and dest.is_file(), out
+        data = json.loads(dest.read_text())
+        print("export:", {k: v for k, v in out["counts"].items() if v})
+        print("export write checks:", out["write_checks"])
+        assert data["format"] == "palate-export" and data["verdicts"]
+
+        # And the guard refuses the paths an injected call would aim at.
+        for bad, why in ((str(Path(TMP) / "inside-home.json"), "hermes_home"),
+                         (str(Path(out_dir) / "notes.txt"), "suffix")):
+            refused = call(ctx, "palate_export", path=bad)
+            assert refused["ok"] is False and refused.get("refused"), refused
+            assert refused["write_checks"][why] == "rejected", refused
+        victim = Path(out_dir) / "someone-elses.json"
+        victim.write_text('{"not": "a palate export"}')
+        refused = call(ctx, "palate_export", path=str(victim))
+        assert refused["ok"] is False
+        assert victim.read_text() == '{"not": "a palate export"}', "must be untouched"
+        print("export guard: refuses the Hermes home, non-.json, and foreign files")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
 
     print("\nSMOKE OK")
 

@@ -24,6 +24,25 @@ class FormatRefused(ValueError):
     """The file is not an export of the expected kind. Carries no file content."""
 
 
+def _raise_if_read_blocked(path):
+    """Honour Hermes' read denylist before opening a caller-supplied path.
+
+    The path is a model-supplied argument, so an injected call could aim this
+    importer at a credential or secret-bearing file. Hermes' own file tools
+    refuse those, and an importer that does not consult the same list is a way
+    around it. Import is lazy and defensive, but a denied read still
+    propagates as a refusal carrying no content from the file.
+    """
+    try:
+        from agent import file_safety  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        file_safety.raise_if_read_blocked(path)
+    except ValueError as exc:
+        raise FormatRefused(str(exc)) from None
+
+
 def read_csv_guarded(path, *, require_all=(), require_any=(), label="this format",
                      max_rows=20000):
     """Open a CSV only if its header proves it is the expected export.
@@ -32,6 +51,7 @@ def read_csv_guarded(path, *, require_all=(), require_any=(), label="this format
     showing nothing from the file when the header does not qualify.
     """
     path = os.path.expanduser(str(path))
+    _raise_if_read_blocked(path)
     if not os.path.isfile(path):
         raise FormatRefused(f"No file at that path. Expected a {label} CSV export.")
     if os.path.getsize(path) > 64 * 1024 * 1024:

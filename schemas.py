@@ -210,13 +210,19 @@ PALATE_EXPORT = {
     "description": (
         "Write the entire ledger to a JSON file: works, verdicts, reasons, axis scores with "
         "their provenance, services and notes. The data is the user's, so it has to be able "
-        "to leave. Mention the path in your reply."
+        "to leave. Mention the path in your reply.\n\n"
+        "The destination is guarded and the call can be refused: the path must end in .json, "
+        "must sit outside the Hermes home, must pass Hermes' write denylist, and must not "
+        "already hold a file that is not an earlier Palate export. A refusal comes back with "
+        "'refused': true and the reason - report it and offer a different path rather than "
+        "retrying variations, and never try to work around it."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "path": {"type": "string",
-                     "description": "Destination file. Defaults to ~/palate-export-<date>.json."},
+                     "description": ("Destination .json file, outside the Hermes home. "
+                                     "Defaults to ~/palate-export-<date>.json.")},
         },
     },
 }

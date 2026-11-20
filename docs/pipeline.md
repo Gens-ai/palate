@@ -137,6 +137,9 @@ removed:
 | Unexamined ≠ unmatched | `picker.rank` — `trait_score: None`, `looked_up: False` | claim a comparison that never happened |
 | Unverifiable constraint | `picker.state_check` — `unchecked` list | say something "fits" on a dimension never measured |
 | Cost is named, not implied | `picker.cost_of` — `cost` on every entry | present a paid rental as if it were free |
+| Export path is untrusted input | `tools._export_write_guard` — denylist, Hermes home, `.json`, no foreign clobber | let an injected tool argument overwrite a shell rc, SSH keys or Hermes' config |
+| Import path is untrusted input | `sources.base._raise_if_read_blocked` | read a credential file the rest of Hermes refuses to read |
+| A check that could not run is not a check that passed | `write_checks` in the result; denylist errors deny | imply the denylist approved a write it never saw |
 | No invented prices | nothing quotes an amount | TMDB gives providers, not prices, so none is guessed |
 | One favourite cannot own the answer | `tools._interleave` + `picker._diversify` (`PICKS_PER_PIVOT`) | present six neighbours of a single liked work as if the whole ledger were consulted |
 | Weak matches say they are weak | `picker.match_strength` — `match_strength` + `strength_note` | print a 2.0 and a 9.8 in the same shape, so the best of a thin pool reads as a recommendation |

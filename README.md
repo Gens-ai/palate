@@ -248,16 +248,26 @@ route. Palate reads no environment variables, no `.env` files and no vendor
 token files, and it does not store or copy the key itself.
 
 **Files read.** Only the single CSV path you pass to `palate_import`, and only
-after the header proves it is a Letterboxd or Trakt export; a file that fails
-that test is refused without any of its contents or column names appearing in
-the result. Nothing else on disk is read, and Hermes's own `state.db` is never
-opened.
+after Hermes' own read denylist allows it *and* the header proves it is a
+Letterboxd or Trakt export; a file that fails either test is refused without
+any of its contents or column names appearing in the result. Nothing else on
+disk is read, and Hermes's own `state.db` is never opened.
 
 **Files written.** Its own database at
 `<hermes home>/plugin-data/palate/data.db`, holding works, verdicts, reasons,
 axis scores, your service list, cached TMDB metadata and cached availability.
-`palate_export` writes a JSON file where you tell it to. Nothing is written to
-the install tree.
+Nothing is written to the install tree.
+
+`palate_export` writes one JSON file to a path you name, and that path is
+guarded, because it arrives as a tool argument and a tool argument can be
+steered by injected text in a page or a file. It is refused when Hermes' own
+write denylist objects, when it lands anywhere inside the Hermes home, when it
+does not end in `.json`, or when a file is already there that is not an
+earlier Palate export. So the worst an injected export can do is create a new
+`.json` file somewhere you can already write — it cannot overwrite your shell
+rc, your SSH keys, Hermes' config, or anything else you own. If the denylist
+cannot be consulted at all, the write is refused rather than allowed, and the
+result says which checks actually ran.
 
 **Process.** No hooks, no middleware, no background threads, no scheduled jobs,
 no shell commands, no subprocesses. Pure Python standard library, no
