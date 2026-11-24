@@ -12,6 +12,7 @@ Two arms carry most of the weight:
 import json
 import os
 import random
+import tempfile
 
 import pytest
 
@@ -809,18 +810,47 @@ def test_export_refuses_the_paths_a_prompt_injection_would_aim_at(con, tmp_path,
     assert tools._export_write_guard(str(tmp_path / "new.json"))[0] is None
 
 
-def test_export_refuses_to_write_inside_the_hermes_home(con, tmp_home, tmp_path):
+def _host_denylist_runs():
+    """Whether Hermes' own write denylist can actually be consulted here.
+
+    Importability is not the test: a bare venv carrying the Hermes checkout on
+    sys.path imports ``agent.file_safety`` fine, then raises from a lazy
+    dependency the moment it is called. The guard treats that as a deny, which
+    is correct, so the suite has to assert the refusal rather than report a
+    failure.
+    """
+    from palate import tools
+
+    fs = tools._file_safety()
+    if fs is None:
+        return False
+    try:
+        fs.is_write_denied(os.path.join(tempfile.gettempdir(), "palate-probe.json"))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def test_export_refuses_to_write_inside_the_hermes_home(con, tmp_home, tmp_path, monkeypatch):
     """The denylist protects known files, so a NEW file there would pass it.
 
     An export has no business inside Hermes' own directory: the plugin's
     storage lives there and is managed by storage.py, not by this tool.
+
+    The denylist is stubbed out so the gate under test is reachable whether or
+    not the host's own check can run; their interaction is covered by
+    ``test_a_denylist_that_cannot_be_consulted_fails_closed``.
     """
     from palate import tools
+
+    monkeypatch.setattr(tools, "_file_safety", lambda: None)
 
     for target in ("credentials.json", "config.json", "plugin-data/anything.json"):
         err, checks = tools._export_write_guard(os.path.join(tmp_home, target))
         assert err and "Hermes home" in err, target
         assert checks["hermes_home"] == "rejected"
+        assert checks["denylist"] == "not available", \
+            "and the result never implies a check that did not run"
 
     # Outside it, the same filename is allowed.
     assert tools._export_write_guard(str(tmp_path / "credentials.json"))[0] is None
@@ -860,8 +890,17 @@ def test_export_through_the_tool_refuses_and_writes_nothing(con, tmp_path):
 
     good = tmp_path / "export.json"
     out = json.loads(tools.palate_export({"path": str(good)}))
-    assert out["ok"] is True and good.is_file()
-    assert out["write_checks"]["suffix"] == "ok"
+    if _host_denylist_runs():
+        assert out["ok"] is True and good.is_file()
+        assert out["write_checks"]["suffix"] == "ok"
+    else:
+        # The host's denylist cannot run in this environment, so the guard
+        # fails closed: a check that errored is not a check that passed. That
+        # is the designed behaviour, and refusing a legitimate export is the
+        # correct end of the trade.
+        assert out["ok"] is False and out.get("refused") is True
+        assert out["write_checks"]["denylist"] == "errored, treated as deny"
+        assert not good.exists(), "and nothing is written on the refused path"
 
 
 def test_import_consults_the_read_denylist(con, tmp_path, monkeypatch):

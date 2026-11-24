@@ -90,6 +90,7 @@ there is no Palate service.
 - [Seeding it from Letterboxd or Trakt](#seeding-it-from-letterboxd-or-trakt)
 - [Tools](#tools)
 - [Why it's called Palate](#why-its-called-palate)
+- [The knots on the cover](#the-knots-on-the-cover)
 - [Disclosure](#disclosure)
 
 ## Reasons, not stars
@@ -232,6 +233,22 @@ the few words that works unchanged for food, wine, music and film, which is
 where this is going.
 
 It is not a palette. People will type that. It is fine.
+
+## The knots on the cover
+
+[Palate's catalog card](assets/marketplace.png) is a quipu: an Andean
+recording device, a primary cord with pendant cords hanging from it and knots
+tied along each one. Inca administrators kept them for census and accounting.
+How much more they encoded is still argued over by the people who study them.
+
+What makes it the right object here is not the knots but who could read them.
+A quipu was legible to the keeper who tied it and largely opaque to everyone
+else, because the conventions lived with the person keeping the record. That
+is this plugin. Your ledger is a local file that means a great deal to your
+next recommendation and almost nothing to anyone else's.
+
+And a cord with no knot is still a cord. The things you turned down are part
+of the record.
 
 ## Disclosure
 
